@@ -1,0 +1,177 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        #chat-log {
+            height: calc(100vh - 200px);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center h-screen p-4">
+
+    <div class="w-full max-w-4xl h-full bg-gray-800 rounded-2xl shadow-lg flex flex-col p-6">
+        <h1 class="text-3xl font-bold text-center text-cyan-400 mb-4">Local WiFi Chat</h1>
+        
+        <div class="flex flex-1 space-x-4 overflow-hidden">
+            <!-- Chat Column -->
+            <div class="w-2/3 flex flex-col">
+                <div id="chat-log" class="flex-1 bg-gray-900 rounded-lg p-4 overflow-y-auto mb-4">
+                    <!-- Messages will appear here -->
+                </div>
+                <form id="chat-form" class="flex space-x-2">
+                    <input id="message-input" type="text" placeholder="Type a message..." autocomplete="off"
+                           class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-white">
+                    <button type="submit"
+                            class="bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                        Send
+                    </button>
+                </form>
+            </div>
+
+            <!-- Video Column -->
+            <div class="w-1/3 bg-gray-900 rounded-lg p-4 flex flex-col items-center justify-center space-y-4">
+                 <div class="w-full aspect-video bg-black rounded-lg relative">
+                    <video id="local-video" autoplay playsinline class="w-full h-full object-cover rounded-lg"></video>
+                    <p class="absolute bottom-2 left-2 text-xs bg-black bg-opacity-50 px-1 rounded">Local</p>
+                </div>
+                 <div class="w-full aspect-video bg-black rounded-lg relative">
+                    <video id="remote-video" autoplay playsinline class="w-full h-full object-cover rounded-lg"></video>
+                    <p class="absolute bottom-2 left-2 text-xs bg-black bg-opacity-50 px-1 rounded">Remote</p>
+                </div>
+                <button id="start-call-btn" 
+                        class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                    Start Call
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Establish Socket.IO connection
+            // Use window.location.hostname to connect to the server running on the same network
+            const socket = io.connect(`http://${window.location.hostname}:8000`);
+
+            // DOM elements
+            const chatLog = document.getElementById('chat-log');
+            const chatForm = document.getElementById('chat-form');
+            const messageInput = document.getElementById('message-input');
+            const startCallBtn = document.getElementById('start-call-btn');
+            const localVideo = document.getElementById('local-video');
+            const remoteVideo = document.getElementById('remote-video');
+
+            let pc; // PeerConnection
+
+            // --- Chat Functionality ---
+            socket.on('connect', () => {
+                appendMessage('System', 'Connected to server.', 'text-yellow-400');
+            });
+
+            socket.on('disconnect', () => {
+                appendMessage('System', 'Disconnected from server.', 'text-red-400');
+            });
+
+            socket.on('message', (data) => {
+                const sender = data.sid === socket.id ? 'You' : `User-${data.sid.substring(0, 5)}`;
+                const alignClass = data.sid === socket.id ? 'text-right' : 'text-left';
+                appendMessage(sender, data.text, 'text-white', alignClass);
+            });
+            
+            chatForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const message = messageInput.value.trim();
+                if (message) {
+                    socket.emit('message', message);
+                    messageInput.value = '';
+                }
+            });
+
+            function appendMessage(sender, text, colorClass, alignClass = 'text-left') {
+                const messageElement = document.createElement('div');
+                messageElement.classList.add('mb-2', alignClass);
+                messageElement.innerHTML = `<p><strong class="${colorClass}">${sender}:</strong> ${text}</p>`;
+                chatLog.appendChild(messageElement);
+                chatLog.scrollTop = chatLog.scrollHeight;
+            }
+
+            // --- WebRTC Functionality ---
+            startCallBtn.addEventListener('click', startCall);
+
+            async function startCall() {
+                if (pc) {
+                    console.warn("Peer connection already exists.");
+                    return;
+                }
+                appendMessage('System', 'Starting call...', 'text-cyan-400');
+                
+                // Create Peer Connection
+                pc = new RTCPeerConnection({
+                    iceServers: [] // For local network, no STUN/TURN server is needed
+                });
+
+                // Set up event listeners for the peer connection
+                pc.onicecandidate = event => {
+                    // This event is handled implicitly by aiortc on the server,
+                    // but in browser-to-browser WebRTC, you'd send candidates here.
+                };
+
+                pc.ontrack = event => {
+                    appendMessage('System', 'Receiving remote stream.', 'text-cyan-400');
+                    if (remoteVideo.srcObject !== event.streams[0]) {
+                        remoteVideo.srcObject = event.streams[0];
+                    }
+                };
+
+                // Get local media
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                    localVideo.srcObject = stream;
+                    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+                    // Create offer and send to server
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+
+                    socket.emit('offer', {
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type,
+                    });
+                    appendMessage('System', 'Offer sent to server.', 'text-cyan-400');
+
+                } catch (error) {
+                    console.error("Error getting user media:", error);
+                    appendMessage('System', `Error starting call: ${error.name}`, 'text-red-500');
+                    if (pc) {
+                        pc.close();
+                        pc = null;
+                    }
+                }
+            }
+
+            // Listen for the answer from the server
+            socket.on('answer', async (data) => {
+                if (pc) {
+                    appendMessage('System', 'Received answer from server.', 'text-cyan-400');
+                    try {
+                        const answer = new RTCSessionDescription(data);
+                        await pc.setRemoteDescription(answer);
+                    } catch (error) {
+                        console.error("Error setting remote description:", error);
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>
