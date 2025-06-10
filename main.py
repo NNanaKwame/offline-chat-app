@@ -7,8 +7,6 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import socketio
 import uvicorn
-from aiortc import RTCPeerConnection, RTCSessionDescription
-from aiortc.contrib.media import MediaPlayer, MediaRelay
 
 # --- Basic Setup ---
 # Configure logging
@@ -28,9 +26,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 
 # --- Data Structures ---
-# Store peer connections and other session data
-pcs = set()
-sid_to_pc = {}
 connected_users = {}  # Track connected users with their info
 call_sessions = {}  # Track active call sessions
 
@@ -69,12 +64,6 @@ async def connect(sid, environ):
 async def disconnect(sid):
     """Handle a client disconnection."""
     logger.info(f"Client disconnected: {sid}")
-    
-    # Clean up peer connection
-    pc = sid_to_pc.pop(sid, None)
-    if pc:
-        await pc.close()
-        pcs.discard(pc)
     
     # Clean up call sessions
     if sid in call_sessions:
@@ -121,68 +110,7 @@ async def message(sid, data):
     
     await sio.emit('message', message_data)
 
-# --- WebRTC Events ---
-@sio.event
-async def offer(sid, data):
-    """Handle an offer from a peer."""
-    logger.info(f"Received offer from {sid}")
-    
-    try:
-        offer_desc = RTCSessionDescription(sdp=data["sdp"], type=data["type"])
-        pc = RTCPeerConnection()
-        
-        # Store the mapping from sid to pc for cleanup later
-        sid_to_pc[sid] = pc
-        pcs.add(pc)
-        
-        @pc.on("iceconnectionstatechange")
-        async def on_iceconnectionstatechange():
-            logger.info(f"ICE connection state is {pc.iceConnectionState}")
-            if pc.iceConnectionState == "failed":
-                await pc.close()
-                pcs.discard(pc)
-                sid_to_pc.pop(sid, None)
-
-        @pc.on("track")
-        def on_track(track):
-            logger.info(f"Track {track.kind} received from {sid}")
-            
-        # Set up the peer connection
-        await pc.setRemoteDescription(offer_desc)
-        answer_desc = await pc.createAnswer()
-        await pc.setLocalDescription(answer_desc)
-
-        # Send answer back to client
-        await sio.emit('answer', {
-            "sdp": pc.localDescription.sdp,
-            "type": pc.localDescription.type
-        }, room=sid)
-        logger.info(f"Sent answer to {sid}")
-        
-    except Exception as e:
-        logger.error(f"Error handling offer from {sid}: {e}")
-        # Clean up on error
-        pc = sid_to_pc.pop(sid, None)
-        if pc:
-            await pc.close()
-            pcs.discard(pc)
-        
-        # Notify client of error
-        await sio.emit('webrtc_error', {
-            "message": f"Failed to process offer: {str(e)}"
-        }, room=sid)
-
-@sio.event
-async def ice_candidate(sid, data):
-    """Handle ICE candidates."""
-    logger.info(f"Received ICE candidate from {sid}")
-    pc = sid_to_pc.get(sid)
-    if pc:
-        try:
-            await pc.addIceCandidate(data)
-        except Exception as e:
-            logger.error(f"Error adding ICE candidate: {e}")
-
+# --- Call Management Events ---
 @sio.event
 async def call_request(sid, data):
     """Handle call requests between users."""
@@ -228,6 +156,13 @@ async def call_response(sid, data):
             connected_users[sid]['status'] = 'in_call'
             connected_users[caller_id]['status'] = 'in_call'
             await sio.emit('user_list', list(connected_users.values()))
+            
+            # Notify both parties that call is accepted
+            await sio.emit('call_accepted', {
+                'responder_id': sid,
+                'caller_id': caller_id
+            }, room=caller_id)
+            
         else:
             # Reset caller status
             connected_users[caller_id]['status'] = 'online'
@@ -262,6 +197,40 @@ async def end_call(sid):
         await sio.emit('user_list', list(connected_users.values()))
         
         logger.info(f"Call ended between {sid} and {partner_sid}")
+
+# --- WebRTC Signaling Events ---
+@sio.event
+async def webrtc_offer(sid, data):
+    """Handle WebRTC offer and forward to call partner."""
+    if sid in call_sessions:
+        partner_sid = call_sessions[sid]
+        await sio.emit('webrtc_offer', {
+            'from': sid,
+            'offer': data
+        }, room=partner_sid)
+        logger.info(f"Forwarded offer from {sid} to {partner_sid}")
+
+@sio.event
+async def webrtc_answer(sid, data):
+    """Handle WebRTC answer and forward to call partner."""
+    if sid in call_sessions:
+        partner_sid = call_sessions[sid]
+        await sio.emit('webrtc_answer', {
+            'from': sid,
+            'answer': data
+        }, room=partner_sid)
+        logger.info(f"Forwarded answer from {sid} to {partner_sid}")
+
+@sio.event
+async def webrtc_ice_candidate(sid, data):
+    """Handle ICE candidates and forward to call partner."""
+    if sid in call_sessions:
+        partner_sid = call_sessions[sid]
+        await sio.emit('webrtc_ice_candidate', {
+            'from': sid,
+            'candidate': data
+        }, room=partner_sid)
+        logger.info(f"Forwarded ICE candidate from {sid} to {partner_sid}")
 
 # --- Server Startup ---
 if __name__ == "__main__":

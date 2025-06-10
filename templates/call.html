@@ -81,7 +81,7 @@
             <!-- Main Video -->
             <div class="flex-1 relative">
                 <div class="bg-gradient-to-br from-gray-800/50 to-gray-900/50 backdrop-blur-sm border border-gray-700/50 rounded-2xl overflow-hidden h-full min-h-[400px] relative">
-                    <video id="remote-video" autoplay playsinline muted class="w-full h-full object-cover hidden"></video>
+                    <video id="remote-video" autoplay playsinline class="w-full h-full object-cover hidden"></video>
                     <div id="remote-placeholder" class="w-full h-full flex items-center justify-center">
                         <div class="text-center">
                             <div class="w-24 h-24 bg-gradient-to-r from-gray-600 to-gray-700 rounded-full mx-auto mb-4 flex items-center justify-center">
@@ -129,7 +129,9 @@
                         Online Users
                     </h3>
                     <div id="users-container" class="space-y-2 max-h-64 overflow-y-auto">
-                        <!-- Users will be populated here -->
+                        <div class="text-gray-400 text-sm text-center py-4">
+                            No other users online
+                        </div>
                     </div>
                 </div>
             </div>
@@ -153,7 +155,7 @@
                 </button>
 
                 <!-- End Call Button -->
-                <button id="end-call-btn" class="w-14 h-14 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 animate-glow" title="End Call" disabled>
+                <button id="end-call-btn" class="w-14 h-14 bg-red-500 hover:bg-red-600 rounded-full flex items-center justify-center transition-all duration-300 hover:scale-110 animate-glow disabled:opacity-50 disabled:cursor-not-allowed" title="End Call" disabled>
                     <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 8l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2M3 3l1.68 4.48L12 12l5.32 5.32L21 21"></path>
                     </svg>
@@ -188,348 +190,229 @@
         <div class="bg-gradient-to-br from-gray-800 to-gray-900 border border-gray-700 rounded-3xl p-8 max-w-md w-full mx-4">
             <h3 class="text-2xl font-bold mb-6 text-center">Set Your Display Name</h3>
             <input type="text" id="username-input" placeholder="Enter your name..." class="w-full bg-gray-700/50 border border-gray-600 rounded-xl px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 mb-6">
+            <div id="username-error" class="text-red-400 text-sm mb-4 hidden">Please enter a valid username</div>
             <button id="save-username-btn" class="w-full bg-gradient-to-r from-blue-500 to-cyan-500 hover:from-blue-600 hover:to-cyan-600 text-white font-semibold py-3 rounded-xl transition-all duration-300 hover:scale-105">
                 Start Video Calling
             </button>
         </div>
     </div>
 
+    <!-- Error Modal -->
+    <div id="error-modal" class="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center hidden">
+        <div class="bg-gradient-to-br from-gray-800 to-gray-900 border border-gray-700 rounded-3xl p-8 max-w-md w-full mx-4 text-center">
+            <div class="w-16 h-16 bg-red-500 rounded-full mx-auto mb-4 flex items-center justify-center">
+                <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                </svg>
+            </div>
+            <h3 class="text-xl font-bold mb-2">Error</h3>
+            <p class="text-gray-400 mb-6" id="error-message">Something went wrong</p>
+            <button id="close-error-btn" class="bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-6 rounded-xl transition-colors">
+                OK
+            </button>
+        </div>
+    </div>
+
     <script>
-        // WebRTC and Socket.IO setup
-        let socket;
-        let localStream;
-        let peerConnection;
-        let currentCallerId = null;
-        let inCall = false;
-        let isVideoEnabled = true;
-        let isAudioEnabled = true;
+document.addEventListener("DOMContentLoaded", () => {
+    const socket = io();  // Connect to server
+    let localStream, peerConnection;
+    let isAudioEnabled = true, isVideoEnabled = true;
+    let currentCallerId = null;
+    let username = "";
 
-        // DOM elements
-        const localVideo = document.getElementById('local-video');
-        const remoteVideo = document.getElementById('remote-video');
-        const remotePlaceholder = document.getElementById('remote-placeholder');
-        const usersContainer = document.getElementById('users-container');
-        const connectionStatus = document.getElementById('connection-status');
-        const muteBtn = document.getElementById('mute-btn');
-        const videoBtn = document.getElementById('video-btn');
-        const endCallBtn = document.getElementById('end-call-btn');
-        const incomingCallModal = document.getElementById('incoming-call-modal');
-        const usernameModal = document.getElementById('username-modal');
-        const callStatusOverlay = document.getElementById('call-status-overlay');
+    const config = {
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    };
 
-        // Initialize
-        async function init() {
-            try {
-                // Get user media
-                localStream = await navigator.mediaDevices.getUserMedia({
-                    video: true,
-                    audio: true
-                });
-                localVideo.srcObject = localStream;
-                
-                // Initialize socket connection
-                socket = io();
-                setupSocketEvents();
-                
-                connectionStatus.textContent = 'Connected';
-                
-            } catch (error) {
-                console.error('Error accessing media devices:', error);
-                connectionStatus.textContent = 'Camera access denied';
-            }
+    const localVideo = document.getElementById("local-video");
+    const remoteVideo = document.getElementById("remote-video");
+    const remotePlaceholder = document.getElementById("remote-placeholder");
+    const callStatusOverlay = document.getElementById("call-status-overlay");
+
+    const usersContainer = document.getElementById("users-container");
+    const usernameModal = document.getElementById("username-modal");
+    const usernameInput = document.getElementById("username-input");
+    const saveUsernameBtn = document.getElementById("save-username-btn");
+    const connectionStatus = document.getElementById("connection-status");
+
+    const muteBtn = document.getElementById("mute-btn");
+    const videoBtn = document.getElementById("video-btn");
+    const endCallBtn = document.getElementById("end-call-btn");
+
+    const incomingCallModal = document.getElementById("incoming-call-modal");
+    const callerName = document.getElementById("caller-name");
+    const acceptCallBtn = document.getElementById("accept-call-btn");
+    const declineCallBtn = document.getElementById("decline-call-btn");
+
+    const errorModal = document.getElementById("error-modal");
+    const errorMessage = document.getElementById("error-message");
+    const closeErrorBtn = document.getElementById("close-error-btn");
+
+    async function startLocalStream() {
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        localVideo.srcObject = localStream;
+    }
+
+    saveUsernameBtn.onclick = () => {
+        const value = usernameInput.value.trim();
+        if (value) {
+            username = value;
+            socket.emit("set_username", username);
+            usernameModal.classList.add("hidden");
+            startLocalStream();
+        } else {
+            document.getElementById("username-error").classList.remove("hidden");
         }
+    };
 
-        // Socket events
-        function setupSocketEvents() {
-            socket.on('connect', () => {
-                console.log('Connected to server');
-                connectionStatus.textContent = 'Connected';
-            });
+    socket.on("connect", () => {
+        connectionStatus.textContent = "Online";
+        connectionStatus.classList.replace("text-green-400", "text-emerald-400");
+    });
 
-            socket.on('user_list', (users) => {
-                updateUsersList(users);
-            });
-
-            socket.on('incoming_call', (data) => {
-                showIncomingCall(data.caller_username, data.caller_id);
-            });
-
-            socket.on('call_response', (data) => {
-                handleCallResponse(data);
-            });
-
-            socket.on('call_ended', (data) => {
-                endCall();
-            });
-
-            socket.on('offer', async (data) => {
-                await handleOffer(data);
-            });
-
-            socket.on('answer', async (data) => {
-                await handleAnswer(data);
-            });
-
-            socket.on('ice_candidate', async (data) => {
-                await handleIceCandidate(data);
-            });
-        }
-
-        // Update users list
-        function updateUsersList(users) {
-            usersContainer.innerHTML = '';
-            const currentUserId = socket.id;
-            
-            users.forEach(user => {
-                if (user.id === currentUserId) return;
-                
-                const userElement = document.createElement('div');
-                userElement.className = 'flex items-center justify-between p-3 bg-gray-700/30 rounded-xl hover:bg-gray-700/50 transition-colors';
-                
-                const statusColor = user.status === 'online' ? 'bg-green-400' : 
-                                   user.status === 'in_call' ? 'bg-red-400' : 'bg-yellow-400';
-                
-                userElement.innerHTML = `
-                    <div class="flex items-center space-x-3">
-                        <div class="w-10 h-10 bg-gradient-to-r from-blue-500 to-purple-500 rounded-full flex items-center justify-center">
-                            <span class="text-white font-semibold">${user.username.charAt(0).toUpperCase()}</span>
-                        </div>
-                        <div>
-                            <div class="font-medium text-white">${user.username}</div>
-                            <div class="flex items-center space-x-1">
-                                <div class="w-2 h-2 ${statusColor} rounded-full"></div>
-                                <span class="text-xs text-gray-400 capitalize">${user.status}</span>
-                            </div>
-                        </div>
-                    </div>
-                    ${user.status === 'online' ? `
-                        <button onclick="callUser('${user.id}')" class="bg-green-500 hover:bg-green-600 text-white p-2 rounded-lg transition-colors">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z"></path>
-                            </svg>
-                        </button>
-                    ` : '<span class="text-xs text-gray-500">Busy</span>'}
-                `;
-                
-                usersContainer.appendChild(userElement);
-            });
-        }
-
-        // Call user
-        async function callUser(userId) {
-            if (inCall) return;
-            
-            currentCallerId = userId;
-            inCall = true;
-            endCallBtn.disabled = false;
-            
-            showCallStatus('Calling...', 'Connecting to user');
-            
-            // Create peer connection
-            await createPeerConnection();
-            
-            // Create offer
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
-            
-            // Send call request
-            socket.emit('call_request', { target_user_id: userId });
-            socket.emit('offer', {
-                sdp: offer.sdp,
-                type: offer.type
-            });
-        }
-
-        // Show incoming call
-        function showIncomingCall(callerName, callerId) {
-            currentCallerId = callerId;
-            document.getElementById('caller-name').textContent = callerName;
-            incomingCallModal.classList.remove('hidden');
-        }
-
-        // Accept call
-        async function acceptCall() {
-            incomingCallModal.classList.add('hidden');
-            inCall = true;
-            endCallBtn.disabled = false;
-            
-            socket.emit('call_response', {
-                caller_id: currentCallerId,
-                accepted: true
-            });
-            
-            await createPeerConnection();
-            showCallStatus('Connecting...', 'Setting up video call');
-        }
-
-        // Decline call
-        function declineCall() {
-            incomingCallModal.classList.add('hidden');
-            socket.emit('call_response', {
-                caller_id: currentCallerId,
-                accepted: false
-            });
-            currentCallerId = null;
-        }
-
-        // Handle call response
-        async function handleCallResponse(data) {
-            if (data.accepted) {
-                showCallStatus('Connected', 'Call in progress');
-                hideCallStatus();
-            } else {
-                endCall();
-                alert('Call was declined');
-            }
-        }
-
-        // Create peer connection
-        async function createPeerConnection() {
-            peerConnection = new RTCPeerConnection({
-                iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
-            });
-
-            // Add local stream
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
-
-            // Handle remote stream
-            peerConnection.ontrack = (event) => {
-                remoteVideo.srcObject = event.streams[0];
-                remoteVideo.classList.remove('hidden');
-                remotePlaceholder.classList.add('hidden');
-                hideCallStatus();
+    socket.on("user_list", users => {
+        usersContainer.innerHTML = "";
+        users.filter(u => u.id !== socket.id).forEach(user => {
+            const userEl = document.createElement("div");
+            userEl.className = "bg-gray-700/40 rounded-xl p-3 cursor-pointer hover:bg-gray-600/50 transition";
+            userEl.innerHTML = `
+                <div class="flex justify-between items-center">
+                    <span class="font-medium text-white">${user.username}</span>
+                    <span class="text-sm text-${user.status === 'in_call' ? 'red' : 'green'}-400 capitalize">${user.status}</span>
+                </div>
+            `;
+            userEl.onclick = () => {
+                socket.emit("call_request", { target_user_id: user.id });
+                callStatusOverlay.classList.remove("hidden");
+                document.getElementById("call-status-title").textContent = "Calling...";
+                document.getElementById("call-status-subtitle").textContent = `Connecting to ${user.username}`;
             };
-
-            // Handle ICE candidates
-            peerConnection.onicecandidate = (event) => {
-                if (event.candidate) {
-                    socket.emit('ice_candidate', event.candidate);
-                }
-            };
-        }
-
-        // Handle WebRTC offer
-        async function handleOffer(data) {
-            if (!peerConnection) {
-                await createPeerConnection();
-            }
-            
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            
-            socket.emit('answer', {
-                sdp: answer.sdp,
-                type: answer.type
-            });
-        }
-
-        // Handle WebRTC answer
-        async function handleAnswer(data) {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(data));
-        }
-
-        // Handle ICE candidate
-        async function handleIceCandidate(data) {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(data));
-        }
-
-        // End call
-        function endCall() {
-            inCall = false;
-            currentCallerId = null;
-            endCallBtn.disabled = true;
-            
-            if (peerConnection) {
-                peerConnection.close();
-                peerConnection = null;
-            }
-            
-            remoteVideo.classList.add('hidden');
-            remotePlaceholder.classList.remove('hidden');
-            document.getElementById('main-video-status').textContent = 'Waiting for connection...';
-            
-            hideCallStatus();
-            socket.emit('end_call');
-        }
-
-        // Show call status
-        function showCallStatus(title, subtitle) {
-            document.getElementById('call-status-title').textContent = title;
-            document.getElementById('call-status-subtitle').textContent = subtitle;
-            callStatusOverlay.classList.remove('hidden');
-        }
-
-        // Hide call status
-        function hideCallStatus() {
-            setTimeout(() => {
-                callStatusOverlay.classList.add('hidden');
-            }, 2000);
-        }
-
-        // Toggle mute
-        function toggleMute() {
-            isAudioEnabled = !isAudioEnabled;
-            localStream.getAudioTracks().forEach(track => {
-                track.enabled = isAudioEnabled;
-            });
-            
-            const muteIcon = document.getElementById('mute-icon');
-            if (isAudioEnabled) {
-                muteBtn.className = muteBtn.className.replace('bg-red-500', 'bg-gray-700');
-                muteIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path>';
-            } else {
-                muteBtn.className = muteBtn.className.replace('bg-gray-700', 'bg-red-500');
-                muteIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1.586l4.707-4.707C10.923 3.663 12 4.109 12 5v14c0 .891-1.077 1.337-1.707.707L5.586 15z" clip-rule="evenodd"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2"></path>';
-            }
-        }
-
-        // Toggle video
-        function toggleVideo() {
-            isVideoEnabled = !isVideoEnabled;
-            localStream.getVideoTracks().forEach(track => {
-                track.enabled = isVideoEnabled;
-            });
-            
-            const videoIcon = document.getElementById('video-icon');
-            if (isVideoEnabled) {
-                videoBtn.className = videoBtn.className.replace('bg-red-500', 'bg-gray-700');
-                videoIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>';
-            } else {
-                videoBtn.className = videoBtn.className.replace('bg-gray-700', 'bg-red-500');
-                videoIcon.innerHTML = '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728L5.636 5.636m12.728 12.728L18 18M5.636 5.636L6 6"></path>';
-            }
-        }
-
-        // Set username
-        function setUsername() {
-            const username = document.getElementById('username-input').value.trim();
-            if (username) {
-                socket.emit('set_username', username);
-                document.getElementById('local-user-name').textContent = username;
-                usernameModal.classList.add('hidden');
-            }
-        }
-
-        // Event listeners
-        muteBtn.addEventListener('click', toggleMute);
-        videoBtn.addEventListener('click', toggleVideo);
-        endCallBtn.addEventListener('click', endCall);
-        
-        document.getElementById('accept-call-btn').addEventListener('click', acceptCall);
-        document.getElementById('decline-call-btn').addEventListener('click', declineCall);
-        document.getElementById('save-username-btn').addEventListener('click', setUsername);
-        
-        document.getElementById('username-input').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                setUsername();
-            }
+            usersContainer.appendChild(userEl);
         });
 
-        // Initialize app
-        init();
-    </script>
-</body>
-</html>
+        if (!users.length) {
+            usersContainer.innerHTML = `<div class="text-gray-400 text-sm text-center py-4">No other users online</div>`;
+        }
+    });
+
+    socket.on("incoming_call", ({ caller_id, caller_username }) => {
+        currentCallerId = caller_id;
+        callerName.textContent = caller_username;
+        incomingCallModal.classList.remove("hidden");
+    });
+
+    acceptCallBtn.onclick = () => {
+        incomingCallModal.classList.add("hidden");
+        callStatusOverlay.classList.remove("hidden");
+        document.getElementById("call-status-title").textContent = "Connecting...";
+        socket.emit("call_response", { caller_id: currentCallerId, accepted: true });
+        createPeerConnection();
+        startLocalStream().then(() => {
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+        });
+    };
+
+    declineCallBtn.onclick = () => {
+        socket.emit("call_response", { caller_id: currentCallerId, accepted: false });
+        incomingCallModal.classList.add("hidden");
+    };
+
+    socket.on("call_accepted", () => {
+        createPeerConnection();
+        startLocalStream().then(() => {
+            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            peerConnection.createOffer().then(offer => {
+                peerConnection.setLocalDescription(offer);
+                socket.emit("webrtc_offer", offer);
+            });
+        });
+    });
+
+    socket.on("call_response", ({ accepted }) => {
+        if (!accepted) {
+            showError("Call declined by user.");
+            callStatusOverlay.classList.add("hidden");
+        }
+    });
+
+    socket.on("webrtc_offer", async ({ from, offer }) => {
+        createPeerConnection();
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit("webrtc_answer", answer);
+    });
+
+    socket.on("webrtc_answer", async ({ from, answer }) => {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+    });
+
+    socket.on("webrtc_ice_candidate", ({ candidate }) => {
+        if (peerConnection) {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        }
+    });
+
+    function createPeerConnection() {
+        peerConnection = new RTCPeerConnection(config);
+        peerConnection.onicecandidate = (e) => {
+            if (e.candidate) {
+                socket.emit("webrtc_ice_candidate", e.candidate);
+            }
+        };
+        peerConnection.ontrack = (e) => {
+            remoteVideo.srcObject = e.streams[0];
+            remoteVideo.classList.remove("hidden");
+            remotePlaceholder.classList.add("hidden");
+            endCallBtn.disabled = false;
+        };
+    }
+
+    endCallBtn.onclick = () => {
+        socket.emit("end_call");
+        cleanupCall();
+    };
+
+    muteBtn.onclick = () => {
+        isAudioEnabled = !isAudioEnabled;
+        localStream.getAudioTracks().forEach(track => (track.enabled = isAudioEnabled));
+    };
+
+    videoBtn.onclick = () => {
+        isVideoEnabled = !isVideoEnabled;
+        localStream.getVideoTracks().forEach(track => (track.enabled = isVideoEnabled));
+    };
+
+    socket.on("call_ended", ({ reason }) => {
+        cleanupCall();
+        showError(reason === "partner_disconnected" ? "Call ended: Partner disconnected" : "Call ended");
+    });
+
+    function cleanupCall() {
+        if (peerConnection) {
+            peerConnection.close();
+            peerConnection = null;
+        }
+        remoteVideo.srcObject = null;
+        remotePlaceholder.classList.remove("hidden");
+        remoteVideo.classList.add("hidden");
+        callStatusOverlay.classList.add("hidden");
+        endCallBtn.disabled = true;
+    }
+
+    socket.on("call_error", ({ message }) => {
+        showError(message);
+        callStatusOverlay.classList.add("hidden");
+    });
+
+    closeErrorBtn.onclick = () => {
+        errorModal.classList.add("hidden");
+    };
+
+    function showError(msg) {
+        errorMessage.textContent = msg;
+        errorModal.classList.remove("hidden");
+    }
+});
+</script>
