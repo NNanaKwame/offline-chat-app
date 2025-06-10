@@ -1,0 +1,249 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline Chat</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        #chat-log {
+            height: calc(100vh - 200px);
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col items-center justify-center h-screen p-4">
+
+    <div class="w-full max-w-4xl h-full bg-gray-800 rounded-2xl shadow-lg flex flex-col p-6">
+        <h1 class="text-3xl font-bold text-center text-cyan-400 mb-4">Local WiFi Chat</h1>
+        
+        <div class="flex flex-1 space-x-4 overflow-hidden">
+            <!-- Chat Column -->
+            <div class="w-2/3 flex flex-col">
+                <div id="chat-log" class="flex-1 bg-gray-900 rounded-lg p-4 overflow-y-auto mb-4">
+                    <!-- Messages will appear here -->
+                </div>
+                <form id="chat-form" class="flex space-x-2">
+                    <input id="message-input" type="text" placeholder="Type a message..." autocomplete="off"
+                           class="flex-1 bg-gray-700 border border-gray-600 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-cyan-500 text-white">
+                    <button type="submit"
+                            class="bg-cyan-500 hover:bg-cyan-600 text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                        Send
+                    </button>
+                </form>
+            </div>
+
+            <!-- Video Column -->
+            <div class="w-1/3 bg-gray-900 rounded-lg p-4 flex flex-col items-center justify-center space-y-4">
+                 <div class="w-full aspect-video bg-black rounded-lg relative">
+                    <video id="local-video" autoplay playsinline muted class="w-full h-full object-cover rounded-lg"></video>
+                    <p class="absolute bottom-2 left-2 text-xs bg-black bg-opacity-50 px-1 rounded">Local</p>
+                </div>
+                 <div class="w-full aspect-video bg-black rounded-lg relative">
+                    <video id="remote-video" autoplay playsinline class="w-full h-full object-cover rounded-lg"></video>
+                    <p class="absolute bottom-2 left-2 text-xs bg-black bg-opacity-50 px-1 rounded">Remote</p>
+                </div>
+                <button id="start-call-btn" 
+                        class="w-full bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-lg transition-colors">
+                    Start Call
+                </button>
+                <button id="end-call-btn" 
+                        class="w-full bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-lg transition-colors hidden">
+                    End Call
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            // Establish Socket.IO connection
+            // Use window.location.hostname to connect to the server running on the same network
+            const socket = io.connect(`http://${window.location.hostname}:8000`);
+
+            // DOM elements
+            const chatLog = document.getElementById('chat-log');
+            const chatForm = document.getElementById('chat-form');
+            const messageInput = document.getElementById('message-input');
+            const startCallBtn = document.getElementById('start-call-btn');
+            const endCallBtn = document.getElementById('end-call-btn');
+            const localVideo = document.getElementById('local-video');
+            const remoteVideo = document.getElementById('remote-video');
+
+            let pc; // PeerConnection
+            let localStream; // Local media stream
+
+            // --- Chat Functionality ---
+            socket.on('connect', () => {
+                appendMessage('System', 'Connected to server.', 'text-yellow-400');
+            });
+
+            socket.on('disconnect', () => {
+                appendMessage('System', 'Disconnected from server.', 'text-red-400');
+            });
+
+            socket.on('message', (data) => {
+                const sender = data.sid === socket.id ? 'You' : `User-${data.sid.substring(0, 5)}`;
+                const alignClass = data.sid === socket.id ? 'text-right' : 'text-left';
+                appendMessage(sender, data.text, 'text-white', alignClass);
+            });
+            
+            // Handle server errors
+            socket.on('error', (data) => {
+                appendMessage('System', `Server error: ${data.message}`, 'text-red-400');
+                endCall();
+            });
+            
+            chatForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                const message = messageInput.value.trim();
+                if (message) {
+                    socket.emit('message', message);
+                    messageInput.value = '';
+                }
+            });
+
+            function appendMessage(sender, text, colorClass, alignClass = 'text-left') {
+                const messageElement = document.createElement('div');
+                messageElement.classList.add('mb-2', alignClass);
+                messageElement.innerHTML = `<p><strong class="${colorClass}">${sender}:</strong> ${text}</p>`;
+                chatLog.appendChild(messageElement);
+                chatLog.scrollTop = chatLog.scrollHeight;
+            }
+
+            // --- WebRTC Functionality ---
+            startCallBtn.addEventListener('click', startCall);
+            endCallBtn.addEventListener('click', endCall);
+
+            async function startCall() {
+                if (pc) {
+                    console.warn("Peer connection already exists.");
+                    return;
+                }
+                
+                try {
+                    appendMessage('System', 'Starting call...', 'text-cyan-400');
+                    
+                    // Get local media first
+                    localStream = await navigator.mediaDevices.getUserMedia({ 
+                        video: { width: 640, height: 480 }, 
+                        audio: true 
+                    });
+                    localVideo.srcObject = localStream;
+                    
+                    // Create Peer Connection
+                    pc = new RTCPeerConnection({
+                        iceServers: [] // For local network, no STUN/TURN server is needed
+                    });
+
+                    // Set up event listeners for the peer connection
+                    pc.onicecandidate = event => {
+                        if (event.candidate) {
+                            console.log('ICE candidate:', event.candidate);
+                            // For local network, candidates are handled automatically
+                        }
+                    };
+
+                    pc.ontrack = event => {
+                        appendMessage('System', 'Receiving remote stream.', 'text-cyan-400');
+                        console.log('Remote track received:', event.streams[0]);
+                        if (remoteVideo.srcObject !== event.streams[0]) {
+                            remoteVideo.srcObject = event.streams[0];
+                        }
+                    };
+
+                    pc.oniceconnectionstatechange = () => {
+                        console.log('ICE connection state:', pc.iceConnectionState);
+                        appendMessage('System', `ICE connection state: ${pc.iceConnectionState}`, 'text-gray-400');
+                        
+                        if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
+                            appendMessage('System', 'Call connected!', 'text-green-400');
+                        } else if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+                            appendMessage('System', 'Call failed or disconnected.', 'text-red-400');
+                        }
+                    };
+
+                    // Add local stream tracks to peer connection
+                    localStream.getTracks().forEach(track => {
+                        pc.addTrack(track, localStream);
+                    });
+
+                    // Create offer and send to server
+                    const offer = await pc.createOffer();
+                    await pc.setLocalDescription(offer);
+
+                    socket.emit('offer', {
+                        sdp: pc.localDescription.sdp,
+                        type: pc.localDescription.type,
+                    });
+                    appendMessage('System', 'Offer sent to server.', 'text-cyan-400');
+                    
+                    // Update UI
+                    startCallBtn.classList.add('hidden');
+                    endCallBtn.classList.remove('hidden');
+
+                } catch (error) {
+                    console.error("Error starting call:", error);
+                    const errorMessage = error.message || error.name || 'Unknown error';
+                    appendMessage('System', `Error starting call: ${errorMessage}`, 'text-red-500');
+                    endCall();
+                }
+            }
+
+            function endCall() {
+                console.log('Ending call...');
+                
+                // Stop local stream
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                    localVideo.srcObject = null;
+                }
+                
+                // Close peer connection
+                if (pc) {
+                    pc.close();
+                    pc = null;
+                }
+                
+                // Clear remote video
+                remoteVideo.srcObject = null;
+                
+                // Update UI
+                startCallBtn.classList.remove('hidden');
+                endCallBtn.classList.add('hidden');
+                
+                appendMessage('System', 'Call ended.', 'text-yellow-400');
+            }
+
+            // Listen for the answer from the server
+            socket.on('answer', async (data) => {
+                if (pc && pc.signalingState !== 'closed') {
+                    try {
+                        appendMessage('System', 'Received answer from server.', 'text-cyan-400');
+                        const answer = new RTCSessionDescription(data);
+                        await pc.setRemoteDescription(answer);
+                        console.log('Remote description set successfully');
+                    } catch (error) {
+                        console.error("Error setting remote description:", error);
+                        appendMessage('System', `Error: ${error.message}`, 'text-red-400');
+                    }
+                } else {
+                    console.warn('Received answer but peer connection is not ready');
+                }
+            });
+
+            // Clean up on page unload
+            window.addEventListener('beforeunload', () => {
+                endCall();
+            });
+        });
+    </script>
+</body>
+</html>
