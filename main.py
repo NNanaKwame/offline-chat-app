@@ -7,6 +7,10 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 import socketio
 import uvicorn
+import ssl
+from fastapi.middleware.cors import CORSMiddleware
+
+
 
 # --- Basic Setup ---
 # Configure logging
@@ -15,6 +19,14 @@ logger = logging.getLogger(__name__)
 
 # FastAPI application
 app = FastAPI()
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=["*"],  # For development only
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
 
 # Socket.IO server
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins='*')
@@ -234,4 +246,15 @@ async def webrtc_ice_candidate(sid, data):
 
 # --- Server Startup ---
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    ssl_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    ssl_context.load_cert_chain('192.168.73.18.pem', '192.168.73.18-key.pem')
+    
+    uvicorn.run(
+        app,
+        host="192.168.73.18",  # Explicitly bind to your IP
+        port=8000,
+        ssl_certfile="192.168.73.18.pem",
+        ssl_keyfile="192.168.73.18-key.pem",
+        ws_ping_interval=20,  # Add WebSocket keepalive
+        ws_ping_timeout=20
+    )
