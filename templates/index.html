@@ -16,8 +16,9 @@
                     animation: {
                         'float': 'float 6s ease-in-out infinite',
                         'glow': 'glow 2s ease-in-out infinite alternate',
-                        'slide-up': 'slideUp 0.8s ease-out',
-                        'fade-in': 'fadeIn 1s ease-out',
+                        'slide-up': 'slideUp 0.8s ease-out forwards',
+                        'fade-in': 'fadeIn 1s ease-out forwards',
+                        'pulse-soft': 'pulseSoft 2s ease-in-out infinite',
                     },
                     keyframes: {
                         float: {
@@ -29,12 +30,16 @@
                             '100%': { boxShadow: '0 0 40px rgba(59, 130, 246, 0.6)' },
                         },
                         slideUp: {
-                            '0%': { transform: 'translateY(50px)', opacity: '0' },
+                            '0%': { transform: 'translateY(30px)', opacity: '0' },
                             '100%': { transform: 'translateY(0)', opacity: '1' },
                         },
                         fadeIn: {
                             '0%': { opacity: '0' },
                             '100%': { opacity: '1' },
+                        },
+                        pulseSoft: {
+                            '0%, 100%': { opacity: '1' },
+                            '50%': { opacity: '0.7' },
                         }
                     }
                 }
@@ -43,147 +48,171 @@
     </script>
 </head>
 <body class="bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 min-h-screen text-white overflow-x-hidden">
-    <!-- Background particles -->
+    <!-- Background particles - optimized for mobile -->
     <div class="fixed inset-0 overflow-hidden pointer-events-none">
-        <div class="absolute top-1/4 left-1/4 w-72 h-72 bg-blue-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-float"></div>
-        <div class="absolute top-1/3 right-1/4 w-72 h-72 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-float" style="animation-delay: 2s;"></div>
-        <div class="absolute bottom-1/4 left-1/3 w-72 h-72 bg-cyan-500 rounded-full mix-blend-multiply filter blur-xl opacity-20 animate-float" style="animation-delay: 4s;"></div>
+        <div class="absolute top-1/4 left-1/4 w-48 h-48 md:w-72 md:h-72 bg-blue-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 md:opacity-20 animate-float"></div>
+        <div class="absolute top-1/3 right-1/4 w-48 h-48 md:w-72 md:h-72 bg-purple-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 md:opacity-20 animate-float" style="animation-delay: 2s;"></div>
+        <div class="absolute bottom-1/4 left-1/3 w-48 h-48 md:w-72 md:h-72 bg-cyan-500 rounded-full mix-blend-multiply filter blur-xl opacity-10 md:opacity-20 animate-float" style="animation-delay: 4s;"></div>
     </div>
 
     <!-- Navigation -->
-    <nav class="relative z-10 px-4 py-6 sm:px-6 lg:px-8">
+    <nav class="relative z-10 px-4 py-4 md:py-6 sm:px-6 lg:px-8">
         <div class="max-w-7xl mx-auto flex justify-between items-center">
-            <div class="flex items-center space-x-3">
-                <div class="w-10 h-10 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center animate-glow">
-                    <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div class="flex items-center space-x-2 md:space-x-3">
+                <div class="w-8 h-8 md:w-10 md:h-10 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center animate-glow">
+                    <svg class="w-4 h-4 md:w-6 md:h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
                     </svg>
                 </div>
-                <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                <h1 class="text-xl md:text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
                     LocalChat
                 </h1>
             </div>
-            <div class="hidden md:flex items-center space-x-6">
-                <span class="text-gray-300 text-sm">Connected on your local network</span>
-                <div class="flex items-center space-x-2">
+            <div class="flex items-center space-x-2 md:space-x-4">
+                <div class="hidden sm:flex items-center space-x-2 text-xs md:text-sm text-gray-300">
+                    <span>Local network</span>
+                </div>
+                <div class="flex items-center space-x-1 md:space-x-2">
                     <div class="w-2 h-2 bg-green-400 rounded-full animate-pulse"></div>
-                    <span class="text-green-400 text-sm font-medium">Online</span>
+                    <span class="text-green-400 text-xs md:text-sm font-medium">Online</span>
                 </div>
             </div>
         </div>
     </nav>
 
     <!-- Main Content -->
-    <main class="relative z-10 px-4 py-12 sm:px-6 lg:px-8">
+    <main class="relative z-10 px-4 py-8 md:py-12 sm:px-6 lg:px-8">
         <div class="max-w-6xl mx-auto">
             <!-- Hero Section -->
-            <div class="text-center mb-16 animate-slide-up">
-                <h2 class="text-5xl md:text-7xl font-bold mb-6 bg-gradient-to-r from-white via-blue-200 to-cyan-300 bg-clip-text text-transparent leading-tight">
+            <section class="text-center mb-12 md:mb-16 animate-slide-up" aria-labelledby="hero-heading">
+                <h2 id="hero-heading" class="text-3xl sm:text-4xl md:text-5xl lg:text-7xl font-bold mb-4 md:mb-6 bg-gradient-to-r from-white via-blue-200 to-cyan-300 bg-clip-text text-transparent leading-tight">
                     Chat & Call
                     <br>
-                    <span class="text-4xl md:text-6xl">Without Internet</span>
+                    <span class="text-2xl sm:text-3xl md:text-4xl lg:text-6xl">Without Internet</span>
                 </h2>
-                <p class="text-xl md:text-2xl text-gray-300 mb-8 max-w-3xl mx-auto leading-relaxed">
+                <p class="text-base sm:text-lg md:text-xl lg:text-2xl text-gray-300 mb-6 md:mb-8 max-w-3xl mx-auto leading-relaxed px-2">
                     Connect with people on your local WiFi network. Send messages and make video calls without needing an internet connection.
                 </p>
-                <div class="flex flex-col sm:flex-row gap-4 justify-center items-center">
-                    <div class="flex items-center space-x-2 text-gray-400">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                
+                <!-- Feature badges - stacked on mobile, row on desktop -->
+                <div class="flex flex-col sm:flex-row gap-3 sm:gap-4 justify-center items-center mb-8 md:mb-0">
+                    <div class="flex items-center space-x-2 text-gray-400 text-sm md:text-base">
+                        <svg class="w-4 h-4 md:w-5 md:h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path>
                         </svg>
                         <span>Private & Secure</span>
                     </div>
-                    <div class="flex items-center space-x-2 text-gray-400">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div class="flex items-center space-x-2 text-gray-400 text-sm md:text-base">
+                        <svg class="w-4 h-4 md:w-5 md:h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
                         </svg>
                         <span>Lightning Fast</span>
                     </div>
-                    <div class="flex items-center space-x-2 text-gray-400">
-                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div class="flex items-center space-x-2 text-gray-400 text-sm md:text-base">
+                        <svg class="w-4 h-4 md:w-5 md:h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z"></path>
                         </svg>
                         <span>No Internet Required</span>  
                     </div>
                 </div>
-            </div>
+            </section>
 
             <!-- Feature Cards -->
-            <div class="grid md:grid-cols-2 gap-8 mb-16 animate-fade-in">
-                <!-- Chat Card -->
-                <div class="group relative bg-gradient-to-br from-gray-800/50 to-gray-900/50 backdrop-blur-sm border border-gray-700/50 rounded-3xl p-8 hover:border-blue-500/50 transition-all duration-500 hover:transform hover:scale-105">
-                    <div class="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-                    <div class="relative z-10">
-                        <div class="w-16 h-16 bg-gradient-to-r from-blue-500 to-blue-600 rounded-2xl flex items-center justify-center mb-6 group-hover:animate-glow">
-                            <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
-                            </svg>
+            <section class="grid gap-6 md:gap-8 mb-12 md:mb-16 animate-fade-in" aria-labelledby="features-heading">
+                <h2 id="features-heading" class="sr-only">Available Features</h2>
+                
+                <!-- Single column on mobile, two columns on md+ -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 md:gap-8">
+                    <!-- Chat Card -->
+                    <article class="group relative bg-gradient-to-br from-gray-800/50 to-gray-900/50 backdrop-blur-sm border border-gray-700/50 rounded-2xl md:rounded-3xl p-6 md:p-8 hover:border-blue-500/50 transition-all duration-500 hover:transform hover:scale-105 focus-within:border-blue-500/50 focus-within:ring-2 focus-within:ring-blue-500/20">
+                        <div class="absolute inset-0 bg-gradient-to-br from-blue-500/10 to-transparent rounded-2xl md:rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                        <div class="relative z-10">
+                            <div class="w-12 h-12 md:w-16 md:h-16 bg-gradient-to-r from-blue-500 to-blue-600 rounded-xl md:rounded-2xl flex items-center justify-center mb-4 md:mb-6 group-hover:animate-glow">
+                                <svg class="w-6 h-6 md:w-8 md:h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"></path>
+                                </svg>
+                            </div>
+                            <h3 class="text-xl md:text-2xl font-bold mb-3 md:mb-4 text-white">Instant Messaging</h3>
+                            <p class="text-gray-300 mb-4 md:mb-6 leading-relaxed text-sm md:text-base">
+                                Send real-time messages to everyone on your network. Perfect for team communication, study groups, or family chat.
+                            </p>
+                            <a href="/chat" 
+                               class="inline-flex items-center space-x-2 bg-blue-500 hover:bg-blue-600 focus:bg-blue-600 focus:ring-2 focus:ring-blue-500/50 text-white font-semibold py-2.5 md:py-3 px-4 md:px-6 rounded-lg md:rounded-xl transition-all duration-300 hover:transform hover:scale-105 hover:shadow-lg hover:shadow-blue-500/25 text-sm md:text-base"
+                               aria-label="Start chatting with LocalChat">
+                                <span>Start Chatting</span>
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+                                </svg>
+                            </a>
                         </div>
-                        <h3 class="text-2xl font-bold mb-4 text-white">Instant Messaging</h3>
-                        <p class="text-gray-300 mb-6 leading-relaxed">
-                            Send real-time messages to everyone on your network. Perfect for team communication, study groups, or family chat.
-                        </p>
-                        <a href="/chat" class="inline-flex items-center space-x-2 bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-300 hover:transform hover:scale-105 hover:shadow-lg hover:shadow-blue-500/25">
-                            <span>Start Chatting</span>
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
-                            </svg>
-                        </a>
-                    </div>
-                </div>
+                    </article>
 
-                <!-- Call Card -->
-                <div class="group relative bg-gradient-to-br from-gray-800/50 to-gray-900/50 backdrop-blur-sm border border-gray-700/50 rounded-3xl p-8 hover:border-green-500/50 transition-all duration-500 hover:transform hover:scale-105">
-                    <div class="absolute inset-0 bg-gradient-to-br from-green-500/10 to-transparent rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
-                    <div class="relative z-10">
-                        <div class="w-16 h-16 bg-gradient-to-r from-green-500 to-green-600 rounded-2xl flex items-center justify-center mb-6 group-hover:animate-glow">
-                            <svg class="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                            </svg>
+                    <!-- Call Card -->
+                    <article class="group relative bg-gradient-to-br from-gray-800/50 to-gray-900/50 backdrop-blur-sm border border-gray-700/50 rounded-2xl md:rounded-3xl p-6 md:p-8 hover:border-green-500/50 transition-all duration-500 hover:transform hover:scale-105 focus-within:border-green-500/50 focus-within:ring-2 focus-within:ring-green-500/20">
+                        <div class="absolute inset-0 bg-gradient-to-br from-green-500/10 to-transparent rounded-2xl md:rounded-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                        <div class="relative z-10">
+                            <div class="w-12 h-12 md:w-16 md:h-16 bg-gradient-to-r from-green-500 to-green-600 rounded-xl md:rounded-2xl flex items-center justify-center mb-4 md:mb-6 group-hover:animate-glow">
+                                <svg class="w-6 h-6 md:w-8 md:h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                                </svg>
+                            </div>
+                            <h3 class="text-xl md:text-2xl font-bold mb-3 md:mb-4 text-white">Video Calls</h3>
+                            <p class="text-gray-300 mb-4 md:mb-6 leading-relaxed text-sm md:text-base">
+                                Make high-quality video calls with crystal clear audio. See who's available and connect instantly with anyone on your network.
+                            </p>
+                            <a href="/call" 
+                               class="inline-flex items-center space-x-2 bg-green-500 hover:bg-green-600 focus:bg-green-600 focus:ring-2 focus:ring-green-500/50 text-white font-semibold py-2.5 md:py-3 px-4 md:px-6 rounded-lg md:rounded-xl transition-all duration-300 hover:transform hover:scale-105 hover:shadow-lg hover:shadow-green-500/25 text-sm md:text-base"
+                               aria-label="Start video calling with LocalChat">
+                                <span>Start Calling</span>
+                                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
+                                </svg>
+                            </a>
                         </div>
-                        <h3 class="text-2xl font-bold mb-4 text-white">Video Calls</h3>
-                        <p class="text-gray-300 mb-6 leading-relaxed">
-                            Make high-quality video calls with crystal clear audio. See who's available and connect instantly with anyone on your network.
-                        </p>
-                        <a href="/call" class="inline-flex items-center space-x-2 bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-300 hover:transform hover:scale-105 hover:shadow-lg hover:shadow-green-500/25">
-                            <span>Start Calling</span>
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"></path>
-                            </svg>
-                        </a>
-                    </div>
+                    </article>
                 </div>
-            </div>
+            </section>
 
             <!-- How it works -->
-            <div class="text-center animate-fade-in">
-                <h3 class="text-3xl font-bold mb-8 text-white">How It Works</h3>
-                <div class="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
-                    <div class="text-center">
-                        <div class="w-12 h-12 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full mx-auto mb-4 flex items-center justify-center text-white font-bold text-xl">1</div>
-                        <h4 class="font-semibold text-white mb-2">Connect to WiFi</h4>
-                        <p class="text-gray-400 text-sm">Make sure you're on the same WiFi network as others</p>
+            <section class="text-center animate-fade-in" aria-labelledby="how-it-works-heading">
+                <h3 id="how-it-works-heading" class="text-2xl md:text-3xl font-bold mb-6 md:mb-8 text-white">How It Works</h3>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-6 md:gap-8 max-w-4xl mx-auto">
+                    <div class="text-center group">
+                        <div class="w-12 h-12 md:w-14 md:h-14 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full mx-auto mb-3 md:mb-4 flex items-center justify-center text-white font-bold text-lg md:text-xl group-hover:animate-pulse-soft transition-all duration-300">
+                            1
+                        </div>
+                        <h4 class="font-semibold text-white mb-2 text-sm md:text-base">Connect to WiFi</h4>
+                        <p class="text-gray-400 text-xs md:text-sm leading-relaxed">Make sure you're on the same WiFi network as others</p>
                     </div>
-                    <div class="text-center">
-                        <div class="w-12 h-12 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full mx-auto mb-4 flex items-center justify-center text-white font-bold text-xl">2</div>
-                        <h4 class="font-semibold text-white mb-2">Choose Your Mode</h4>
-                        <p class="text-gray-400 text-sm">Select chat for messaging or calls for video communication</p>
+                    <div class="text-center group">
+                        <div class="w-12 h-12 md:w-14 md:h-14 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full mx-auto mb-3 md:mb-4 flex items-center justify-center text-white font-bold text-lg md:text-xl group-hover:animate-pulse-soft transition-all duration-300">
+                            2
+                        </div>
+                        <h4 class="font-semibold text-white mb-2 text-sm md:text-base">Choose Your Mode</h4>
+                        <p class="text-gray-400 text-xs md:text-sm leading-relaxed">Select chat for messaging or calls for video communication</p>
                     </div>
-                    <div class="text-center">
-                        <div class="w-12 h-12 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full mx-auto mb-4 flex items-center justify-center text-white font-bold text-xl">3</div>
-                        <h4 class="font-semibold text-white mb-2">Start Communicating</h4>
-                        <p class="text-gray-400 text-sm">Send messages or make calls instantly with everyone online</p>
+                    <div class="text-center group">
+                        <div class="w-12 h-12 md:w-14 md:h-14 bg-gradient-to-r from-purple-500 to-pink-500 rounded-full mx-auto mb-3 md:mb-4 flex items-center justify-center text-white font-bold text-lg md:text-xl group-hover:animate-pulse-soft transition-all duration-300">
+                            3
+                        </div>
+                        <h4 class="font-semibold text-white mb-2 text-sm md:text-base">Start Communicating</h4>
+                        <p class="text-gray-400 text-xs md:text-sm leading-relaxed">Send messages or make calls instantly with everyone online</p>
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
     </main>
 
     <!-- Footer -->
-    <footer class="relative z-10 mt-20 py-8 border-t border-gray-800">
+    <footer class="relative z-10 mt-16 md:mt-20 py-6 md:py-8 border-t border-gray-800">
         <div class="max-w-6xl mx-auto px-4 text-center text-gray-400">
-            <p>&copy; 2025 LocalChat. Built for local network communication.</p>
+            <p class="text-sm md:text-base">&copy; 2025 LocalChat. Built for local network communication.</p>
         </div>
     </footer>
+
+    <!-- Skip to main content link for accessibility -->
+    <a href="#main-content" class="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 bg-blue-600 text-white px-4 py-2 rounded-md z-50">
+        Skip to main content
+    </a>
 </body>
 </html>

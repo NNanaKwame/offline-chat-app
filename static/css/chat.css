@@ -1,0 +1,85 @@
+/* CSS Reset and Base Styles */
+:root {
+    /* Using a base font size of 16px for easy rem calculations */
+    font-size: 16px;
+}
+
+body {
+    /* iOS safe area support */
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+}
+
+/* Custom scrollbar for webkit browsers */
+.custom-scrollbar::-webkit-scrollbar {
+    width: 0.25rem;
+    /* Using rem for scalable scrollbar */
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+    background: #374151;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #6B7280;
+    border-radius: 0.125rem;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #9CA3AF;
+}
+
+/* Prevent text selection on UI elements */
+.no-select {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    -khtml-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+}
+
+/* Responsive Sidebar */
+.slide-in {
+    transform: translateX(-100%);
+    transition: transform 0.3s ease-in-out;
+}
+
+.slide-in.open {
+    transform: translateX(0);
+}
+
+/* Responsive Image Preview */
+.image-preview {
+    max-width: 12.5rem;
+    /* Using rem for scalable image preview */
+    max-height: 9.375rem;
+    object-fit: cover;
+}
+
+/* File upload drag and drop */
+.drag-over {
+    border-color: #3B82F6;
+    background-color: rgba(59, 130, 246, 0.1);
+}
+
+/* Upload progress */
+.upload-progress {
+    background: linear-gradient(90deg, #3B82F6 var(--progress, 0%), transparent var(--progress, 0%));
+}
+
+/* Image modal */
+.image-modal {
+    backdrop-filter: blur(10px);
+}
+
+/* Media Queries for Responsiveness */
+/* Small devices (phones, less than 640px) */
+@media (max-width: 639px) {
+    :root {
+        font-size: 14px;
+        /* Slightly smaller base font on small screens */
+    }
+}
