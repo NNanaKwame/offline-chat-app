@@ -160,7 +160,8 @@ async def upload_file(file: UploadFile = File(...), uploader_id: str = Form(...)
                         detail=f"File exceeds {MAX_FILE_SIZE / (1024*1024*1024):.0f}GB limit.",
                     )
                 buffer.write(chunk)
-    except Exception:
+    except Exception as e:
+        logger.error(f"File upload failed for {filename}. Reason: {e}")
         if os.path.exists(file_path):
             os.remove(file_path)
         raise HTTPException(status_code=500, detail="Error uploading file.")
@@ -231,7 +232,7 @@ async def download_file(file_id: str):
     )
 
 
-# --- Socket.IO Events (No changes below this line) ---
+# --- Socket.IO Events (Now with improved error handling) ---
 @sio.event
 async def connect(sid, environ):
     """Handle a new client connection."""
@@ -247,23 +248,35 @@ async def connect(sid, environ):
 
 @sio.event
 async def disconnect(sid):
-    """Handle a client disconnection."""
+    """Handle a client disconnection, ensuring call cleanup."""
     logger.info(f"Client disconnected: {sid}")
+
+    # Gracefully end any active call the user was in
     if sid in call_sessions:
-        call_partner = call_sessions[sid]
-        if call_partner in call_sessions:
-            await sio.emit(
-                "call_ended", {"reason": "partner_disconnected"}, room=call_partner
-            )
-            call_sessions.pop(call_partner, None)
+        partner_sid = call_sessions[sid]
+        logger.info(f"User {sid} disconnected during a call with {partner_sid}.")
+        
+        # Notify the partner that the call has ended
+        if partner_sid in connected_users:
+            await sio.emit("call_ended", {"reason": "Your partner disconnected."}, room=partner_sid)
+            connected_users[partner_sid]["status"] = "online" # Reset partner's status
+
+        # Clean up session data for both users
+        call_sessions.pop(partner_sid, None)
         call_sessions.pop(sid, None)
+
+    # Remove user from connected list and update everyone
     connected_users.pop(sid, None)
     await sio.emit("user_list", list(connected_users.values()))
 
 
 @sio.event
 async def set_username(sid, username):
-    """Allow users to set their username."""
+    """Allow users to set their username, with basic validation."""
+    if not isinstance(username, str) or not (2 <= len(username) <= 20):
+        logger.warning(f"User {sid} sent invalid username: {username}")
+        return
+        
     if sid in connected_users:
         connected_users[sid]["username"] = username
         await sio.emit("user_list", list(connected_users.values()))
@@ -273,13 +286,13 @@ async def set_username(sid, username):
 @sio.event
 async def message(sid, data):
     """Handle incoming text messages and broadcast them."""
-    username = connected_users.get(sid, {}).get("username", f"User-{sid[:8]}")
-    message_content = ""
-    if isinstance(data, dict) and data.get("type") == "text":
-        message_content = data.get("content", "")
-    else:
+    if not isinstance(data, dict) or data.get("type") != "text":
         logger.warning(f"Received malformed message data from {sid}: {data}")
         return
+        
+    username = connected_users.get(sid, {}).get("username", f"User-{sid[:8]}")
+    message_content = data.get("content", "")
+    
     logger.info(f"Message from {username} ({sid}): {message_content}")
     message_data = {
         "sid": sid,
@@ -292,133 +305,119 @@ async def message(sid, data):
 
 
 @sio.event
-async def update_status(sid, status):
-    """Update user status (online, busy, in_call)."""
-    if sid in connected_users:
-        connected_users[sid]["status"] = status
-        await sio.emit("user_list", list(connected_users.values()))
-
-
-@sio.event
-async def in_call_message(sid, data):
-    if sid in call_sessions:
-        partner_sid = call_sessions[sid]
-        username = connected_users.get(sid, {}).get("username", "User")
-        await sio.emit(
-            "in_call_message",
-            {"text": data["text"], "username": username},
-            room=partner_sid,
-        )
-
-
-@sio.event
 async def call_request(sid, data):
+    """Handle a user's request to call another user."""
+    if not isinstance(data, dict) or "target_user_id" not in data:
+        logger.error(f"Malformed call_request from {sid}: {data}")
+        return
+
     target_sid = data.get("target_user_id")
     caller_username = connected_users.get(sid, {}).get("username", f"User-{sid[:8]}")
-    if target_sid and target_sid in connected_users:
-        if connected_users[target_sid].get("status") != "online":
-            await sio.emit(
-                "call_error",
-                {
-                    "message": f"User is currently {connected_users[target_sid].get('status')}."
-                },
-                room=sid,
-            )
-            return
-        connected_users[sid]["status"] = "Ringing"
-        connected_users[target_sid]["status"] = "Ringing"
-        await sio.emit("user_list", list(connected_users.values()))
-        await sio.emit(
-            "incoming_call",
-            {"caller_id": sid, "caller_username": caller_username},
-            room=target_sid,
-        )
-    else:
-        await sio.emit("call_error", {"message": "User not found or offline"}, room=sid)
+
+    if not target_sid or target_sid not in connected_users:
+        await sio.emit("call_error", {"message": "The user you are trying to call is offline."}, room=sid)
+        return
+
+    if connected_users[target_sid].get("status") != "online":
+        status = connected_users[target_sid].get('status', 'unavailable')
+        await sio.emit("call_error", {"message": f"User is currently busy ({status})."}, room=sid)
+        return
+
+    # Set statuses to 'Ringing' and notify clients
+    connected_users[sid]["status"] = "Ringing"
+    connected_users[target_sid]["status"] = "Ringing"
+    await sio.emit("user_list", list(connected_users.values()))
+    
+    # Emit the incoming call event to the target user
+    await sio.emit(
+        "incoming_call",
+        {"caller_id": sid, "caller_username": caller_username},
+        room=target_sid,
+    )
 
 
 @sio.event
 async def call_response(sid, data):
+    """Handle the response to a call invitation (accept/reject)."""
+    if not isinstance(data, dict) or "caller_id" not in data or "accepted" not in data:
+        logger.error(f"Malformed call_response from {sid}: {data}")
+        return
+        
     caller_id = data.get("caller_id")
     accepted = data.get("accepted", False)
-    if caller_id in connected_users and sid in connected_users:
-        if accepted:
-            call_sessions[sid] = caller_id
-            call_sessions[caller_id] = sid
-            connected_users[sid]["status"] = "in_call"
-            connected_users[caller_id]["status"] = "in_call"
 
-            ## [FIX] Only notify the original caller to initiate the WebRTC offer.
-            ## The responder will wait for the offer.
-            await sio.emit("call_accepted", {"responder_id": sid}, room=caller_id)
-        else:
-            connected_users[caller_id]["status"] = "online"
-            connected_users[sid]["status"] = "online"
-            await sio.emit(
-                "call_response",
-                {"responder_id": sid, "accepted": accepted},
-                room=caller_id,
-            )
+    if caller_id not in connected_users:
+        logger.warning(f"{sid} responded to a call from a non-existent user {caller_id}")
+        return
 
-        await sio.emit("user_list", list(connected_users.values()))
-        logger.info(
-            f"Call response from {sid} to {caller_id}: {'accepted' if accepted else 'rejected'}"
-        )
+    if accepted:
+        logger.info(f"Call accepted between {caller_id} and {sid}")
+        # Establish the call session for both users
+        call_sessions[sid] = caller_id
+        call_sessions[caller_id] = sid
+        connected_users[sid]["status"] = "in_call"
+        connected_users[caller_id]["status"] = "in_call"
+        
+        # Notify the original caller to initiate the WebRTC connection
+        await sio.emit("call_accepted", {"responder_id": sid}, room=caller_id)
+    else:
+        logger.info(f"Call rejected by {sid} for caller {caller_id}")
+        # Reset status for both users if the call is rejected
+        connected_users[caller_id]["status"] = "online"
+        connected_users[sid]["status"] = "online"
+        await sio.emit("call_rejected", {"responder_username": connected_users[sid]['username']}, room=caller_id)
+    
+    # Update user lists for all clients
+    await sio.emit("user_list", list(connected_users.values()))
 
 
 @sio.event
 async def end_call(sid):
-    """Handle call ending."""
+    """Handle call ending initiated by one of the participants."""
     if sid in call_sessions:
         partner_sid = call_sessions[sid]
-        call_sessions.pop(sid, None)
-        call_sessions.pop(partner_sid, None)
+        logger.info(f"Call ended by {sid}. Notifying partner {partner_sid}")
+
+        # Notify the other user that the call has ended
+        await sio.emit("call_ended", {"reason": "The call was ended by your partner."}, room=partner_sid)
+
+        # Reset statuses
         if sid in connected_users:
             connected_users[sid]["status"] = "online"
         if partner_sid in connected_users:
             connected_users[partner_sid]["status"] = "online"
-        await sio.emit("call_ended", {"reason": "ended_by_partner"}, room=partner_sid)
-        await sio.emit("user_list", list(connected_users.values()))
-        logger.info(f"Call ended between {sid} and {partner_sid}")
 
+        # Clean up session for both users
+        call_sessions.pop(sid, None)
+        call_sessions.pop(partner_sid, None)
+        
+        # Update everyone's user list
+        await sio.emit("user_list", list(connected_users.values()))
+
+
+# --- WebRTC Signaling Events ---
+
+async def forward_webrtc_event(sid, event_name, data):
+    """Generic handler to forward WebRTC data to the call partner."""
+    if sid not in call_sessions:
+        logger.warning(f"{event_name} received from {sid} who is not in a call.")
+        return
+        
+    partner_sid = call_sessions[sid]
+    logger.info(f"Forwarding {event_name} from {sid} to {partner_sid}")
+    await sio.emit(event_name, data, room=partner_sid)
 
 @sio.event
 async def webrtc_offer(sid, data):
-    """Handle WebRTC offer and forward to call partner."""
-    if sid in call_sessions:
-        partner_sid = call_sessions[sid]
-        # Just use data directly if it's the offer
-        await sio.emit(
-            "webrtc_offer", 
-            {"from": sid, "offer": data}, 
-            room=partner_sid
-        )
-        logger.info(f"Forwarded offer from {sid} to {partner_sid}")
-
+    await forward_webrtc_event(sid, "webrtc_offer", data)
 
 @sio.event
 async def webrtc_answer(sid, data):
-    """Handle WebRTC answer and forward to call partner."""
-    if sid in call_sessions:
-        partner_sid = call_sessions[sid]
-        # Just use data directly if it's the answer
-        await sio.emit(
-            "webrtc_answer", 
-            {"from": sid, "answer": data}, 
-            room=partner_sid
-        )
-        logger.info(f"Forwarded answer from {sid} to {partner_sid}")
-
+    await forward_webrtc_event(sid, "webrtc_answer", data)
 
 @sio.event
 async def webrtc_ice_candidate(sid, data):
-    """Handle ICE candidates and forward to call partner."""
-    if sid in call_sessions:
-        partner_sid = call_sessions[sid]
-        await sio.emit(
-            "webrtc_ice_candidate", {"from": sid, "candidate": data}, room=partner_sid
-        )
-        logger.info(f"Forwarded ICE candidate from {sid} to {partner_sid}")
+    await forward_webrtc_event(sid, "webrtc_ice_candidate", data)
 
 
 # --- Server Startup ---

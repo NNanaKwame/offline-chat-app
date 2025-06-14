@@ -43,11 +43,14 @@ body {
 
 /* Responsive Sidebar */
 .slide-in {
+    -webkit-transform: translateX(-100%); /* Add this */
     transform: translateX(-100%);
+    -webkit-transition: transform 0.3s ease-in-out; /* Add this */
     transition: transform 0.3s ease-in-out;
 }
 
 .slide-in.open {
+    -webkit-transform: translateX(0);
     transform: translateX(0);
 }
 
@@ -72,6 +75,7 @@ body {
 
 /* Image modal */
 .image-modal {
+    -webkit-backdrop-filter: blur(10px); /* Add this */
     backdrop-filter: blur(10px);
 }
 

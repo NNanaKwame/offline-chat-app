@@ -5,16 +5,25 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Video Call</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="/static/css/call.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="stylesheet" href="/static/css/call.css">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
 </head>
 <body>
+    <!-- Toast Notifications Container -->
+    <div class="toast-container position-fixed top-0 end-0 p-3"></div>
+
     <div class="container-fluid">
         <div class="row vh-100">
+            <!-- User List Sidebar -->
             <div class="col-md-3 user-list-container bg-light border-end">
-                <h4 class="mt-3 mb-3 text-center">Connected Users</h4>
+                <h4 class="mt-3 mb-3 text-center" data-count="0">Connected Users</h4>
                 <div id="user-list" class="list-group">
-                    </div>
+                    <!-- Users will be dynamically added here -->
+                </div>
                 <div class="text-center mt-3">
                     <a href="/chat" class="btn btn-secondary">
                         <i class="fas fa-comment"></i> Go to Chat
@@ -22,56 +31,155 @@
                 </div>
             </div>
 
+            <!-- Main Video Area -->
             <div class="col-md-9 d-flex flex-column p-0">
                 <div class="video-container flex-grow-1 d-flex justify-content-center align-items-center bg-dark">
+                    <!-- Remote Video -->
                     <video id="remoteVideo" class="video-main" autoplay playsinline></video>
+                    
+                    <!-- Local Video (Picture-in-Picture) -->
                     <video id="localVideo" class="video-pip" autoplay playsinline muted></video>
 
+                    <!-- Call Placeholder -->
                     <div id="call-placeholder" class="text-light text-center">
-                        <i class="fas fa-video fa-3x mb-3"></i>
+                        <i class="fas fa-video"></i>
                         <p>Select a user and start a call</p>
                     </div>
                 </div>
 
+                <!-- Control Bar -->
                 <div class="call-controls bg-secondary d-flex justify-content-center align-items-center p-3">
-                    <button id="hangUpBtn" class="btn btn-danger btn-lg me-3" disabled>
-                        <i class="fas fa-phone-slash"></i> Hang Up
+                    <button id="muteBtn" class="btn btn-dark btn-lg me-2" disabled>
+                        <i class="fas fa-microphone"></i>
                     </button>
-                    <button id="muteBtn" class="btn btn-dark btn-lg me-3" disabled>
-                        <i class="fas fa-microphone"></i> Mute
+                    <button id="videoBtn" class="btn btn-dark btn-lg me-2" disabled>
+                        <i class="fas fa-video"></i>
                     </button>
-                    <button id="videoBtn" class="btn btn-dark btn-lg" disabled>
-                        <i class="fas fa-video"></i> Disable Video
+                    <button id="hangUpBtn" class="btn btn-danger btn-lg me-2" disabled>
+                        <i class="fas fa-phone-slash"></i>
+                    </button>
+                    <button id="screenShareBtn" class="btn btn-dark btn-lg" disabled>
+                        <i class="fas fa-desktop"></i>
                     </button>
                 </div>
             </div>
         </div>
     </div>
 
-    <div class="modal fade" id="incomingCallModal" tabindex="-1" aria-labelledby="incomingCallLabel" aria-hidden="true">
-        <div class="modal-dialog">
+    <!-- Incoming Call Modal -->
+    <div class="modal fade" id="incomingCallModal" tabindex="-1" aria-labelledby="incomingCallLabel" aria-hidden="true" data-bs-backdrop="static">
+        <div class="modal-dialog modal-dialog-centered">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="incomingCallLabel">Incoming Call</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
                 <div class="modal-body">
                     <p><strong id="callerUsername"></strong> is calling you.</p>
                 </div>
                 <div class="modal-footer">
                     <button id="rejectCallBtn" type="button" class="btn btn-danger" data-bs-dismiss="modal">
-                        <i class="fas fa-phone-slash"></i> Reject
+                        <i class="fas fa-phone-slash"></i>
                     </button>
                     <button id="acceptCallBtn" type="button" class="btn btn-success">
-                        <i class="fas fa-phone"></i> Accept
+                        <i class="fas fa-phone"></i>
                     </button>
                 </div>
             </div>
         </div>
     </div>
 
+    <!-- Scripts -->
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <!-- Enhanced UI interactions -->
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Enhanced button interactions
+            const buttons = document.querySelectorAll('.btn');
+            buttons.forEach(button => {
+                button.addEventListener('click', function() {
+                    if (!this.disabled) {
+                        this.style.transform = 'scale(0.95)';
+                        setTimeout(() => {
+                            this.style.transform = '';
+                        }, 150);
+                    }
+                });
+            });
+
+            // Update user count display
+            function updateUserCount() {
+                const userList = document.getElementById('user-list');
+                const userCountElement = document.querySelector('h4[data-count]');
+                const count = userList.children.length;
+                userCountElement.setAttribute('data-count', count);
+            }
+
+            // Enhanced user list item creation
+            function createUserListItem(username, status = 'online') {
+                const listItem = document.createElement('div');
+                listItem.className = 'list-group-item fade-in';
+                listItem.setAttribute('data-username', username.charAt(0).toUpperCase());
+                listItem.innerHTML = `
+                    <div class="d-flex align-items-center w-100">
+                        <div class="flex-grow-1">
+                            <div class="fw-semibold">${username}</div>
+                            <small class="text-muted">${status}</small>
+                        </div>
+                        <div class="user-status status-${status}"></div>
+                    </div>
+                `;
+                return listItem;
+            }
+
+            // Enhanced toast notifications
+            function showToast(message, type = 'info') {
+                const toastContainer = document.querySelector('.toast-container');
+                const toastId = 'toast-' + Date.now();
+                
+                const toastHtml = `
+                    <div class="toast fade-in" id="${toastId}" role="alert" aria-live="assertive" aria-atomic="true">
+                        <div class="toast-header">
+                            <i class="fas fa-info-circle text-${type} me-2"></i>
+                            <strong class="me-auto">Video Call</strong>
+                            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+                        </div>
+                        <div class="toast-body">
+                            ${message}
+                        </div>
+                    </div>
+                `;
+                
+                toastContainer.insertAdjacentHTML('beforeend', toastHtml);
+                
+                const toastElement = document.getElementById(toastId);
+                const toast = new bootstrap.Toast(toastElement, { delay: 4000 });
+                toast.show();
+                
+                toastElement.addEventListener('hidden.bs.toast', () => {
+                    toastElement.remove();
+                });
+            }
+
+            // Mobile sidebar toggle (if needed)
+            if (window.innerWidth <= 768) {
+                const sidebar = document.querySelector('.user-list-container');
+                document.addEventListener('click', (e) => {
+                    if (!sidebar.contains(e.target) && sidebar.classList.contains('show')) {
+                        sidebar.classList.remove('show');
+                    }
+                });
+            }
+
+            // Expose functions for the original call.js to use
+            window.updateUserCount = updateUserCount;
+            window.createUserListItem = createUserListItem;
+            window.showToast = showToast;
+        });
+    </script>
+    
+    <!-- Include the original call.js -->
     <script src="/static/js/call.js"></script>
 </body>
 </html>
