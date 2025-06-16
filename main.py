@@ -191,7 +191,7 @@ async def upload_file(file: UploadFile = File(...), uploader_id: str = Form(...)
         "file": file_metadata,
         "timestamp": asyncio.get_event_loop().time(),
     }
-    await sio.emit("message", message_data, skip_sid=uploader_id)
+    await sio.emit("message", message_data)
 
     # --- NEW: Add Warnings ---
     # 1. Warn ALL users about downloading files
@@ -301,7 +301,8 @@ async def message(sid, data):
         "text": message_content,
         "timestamp": asyncio.get_event_loop().time(),
     }
-    await sio.emit("message", message_data, skip_sid=sid)
+    # await sio.emit("message", message_data, skip_sid=sid)
+    await sio.emit("message", message_data)
 
 
 @sio.event
