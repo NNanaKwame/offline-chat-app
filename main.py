@@ -430,3 +430,11 @@ if __name__ == "__main__":
         logger.error(
             f"Missing SSL files: {cert_file}, {key_file}. Please generate them using openssl."
         )
+
+# --- Server Startup --- (Modified for ngrok Development)
+# if __name__ == "__main__":
+#     # We will run on plain HTTP and let ngrok handle the HTTPS layer.
+#     # This is a more stable setup for local development.
+#     uvicorn.run(
+#         app, host="127.0.0.1", port=8000
+#     )
