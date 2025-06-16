@@ -420,6 +420,24 @@ async def webrtc_answer(sid, data):
 async def webrtc_ice_candidate(sid, data):
     await forward_webrtc_event(sid, "webrtc_ice_candidate", data)
 
+@sio.event
+async def typing_start(sid, data):
+    """Broadcast when a user starts typing."""
+    logger.info(f"User {sid} started typing.")
+    # We broadcast to everyone except the original sender.
+    # The client will decide if it needs to show the indicator.
+    await sio.emit('typing_start', {
+        'sid': sid, 
+        'username': connected_users.get(sid, {}).get('username')
+    }, skip_sid=sid)
+
+@sio.event
+async def typing_stop(sid, data):
+    """Broadcast when a user stops typing."""
+    logger.info(f"User {sid} stopped typing.")
+    await sio.emit('typing_stop', {'sid': sid}, skip_sid=sid)
+
+
 
 # --- Server Startup ---
 if __name__ == "__main__":
