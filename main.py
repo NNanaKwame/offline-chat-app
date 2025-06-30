@@ -416,9 +416,11 @@ async def connect(sid, environ, auth):
 
         # Method 2: Try query string from environ
         if not username:
-            query_string = environ.get("asgi.query_string", b"")
+            query_string = environ.get("QUERY_STRING", b"")
             if isinstance(query_string, bytes):
                 query_string = query_string.decode()
+            elif query_string is None:
+                query_string = ""
 
             logger.info(f"Query string: {query_string}")
 
@@ -429,49 +431,51 @@ async def connect(sid, environ, auth):
                     username = params.get("userId", [None])[0]
                 logger.info(f"Username from query: {username}")
 
-        # Method 3: Try Socket.IO handshake data
-        if not username:
-            try:
-                # Access Socket.IO session data
-                session = await sio.get_session(sid)
-                username = session.get("username")
-                logger.info(f"Username from session: {username}")
-            except:
-                pass
-
         if not username:
             logger.error("No username found in any method")
-            raise ValueError("No username provided")
+            return False
 
         logger.info(f"Final username: {username}")
+
+        # Add user to our connected list
+        connected_users[username] = {
+            "username": username,
+            "sid": sid,
+            "status": "online",
+        }
+        
+        # Map both directions correctly
+        sid_to_username[sid] = username
+        username_to_sid[username] = sid
+        
+        logger.info(f"Added user mapping: SID {sid} -> Username {username}")
+        logger.info(f"Current connected users: {list(connected_users.keys())}")
+
+        # Broadcast the updated list of online users to ALL connected clients
+        online_users_list = [
+            {"username": u["username"], "status": u["status"]}
+            for u in connected_users.values()
+        ]
+        
+        logger.info(f"Broadcasting user list to all clients: {online_users_list}")
+        await sio.emit("user_list", online_users_list)  # Broadcast to all
+        
         logger.info(f"=== END CONNECT ===")
+        return True
 
     except Exception as e:
-        logger.error(f"Connection from {sid} rejected: {str(e)}")
+        logger.error(f"Connection from {sid} failed with exception: {str(e)}")
         return False
 
-    logger.info(f"Client connected: {sid} with username: {username}")
 
-    # Add user to our connected list
-    connected_users[username] = {
-        "username": username,
-        "sid": sid,
-        "status": "online",
-    }
-    sid_to_username[sid] = username
-    username_to_sid[username] = sid
-
-    # Broadcast the updated list of online users
-    online_users_list = [
-        {"username": u["username"], "status": u["status"]}
-        for u in connected_users.values()
-    ]
-    await sio.emit("user_list", online_users_list)
-
-
+# Also update the disconnect handler to broadcast user list
 @sio.event
 async def disconnect(sid):
     """Handle a client disconnection, ensuring call cleanup."""
+    
+    # Get username before cleanup
+    userId = sid_to_username.get(sid)
+    logger.info(f"Client disconnected: {sid} (userId: {userId})")
 
     # Gracefully end any active call the user was in
     if sid in call_sessions:
@@ -483,28 +487,29 @@ async def disconnect(sid):
             await sio.emit(
                 "call_ended", {"reason": "Your partner disconnected."}, room=partner_sid
             )
-            connected_users[partner_sid]["status"] = "online"  # Reset partner's status
+            # Reset partner's status
+            partner_username = sid_to_username.get(partner_sid)
+            if partner_username and partner_username in connected_users:
+                connected_users[partner_username]["status"] = "online"
 
         # Clean up session data for both users
         call_sessions.pop(partner_sid, None)
         call_sessions.pop(sid, None)
 
-    userId = sid_to_username.pop(sid, None)
+    # Clean up user mappings
     if userId:
-        del connected_users[userId]
-        if userId in username_to_sid:  # <-- Add this check
-            del username_to_sid[userId]  # <-- and this line to clean up
+        connected_users.pop(userId, None)
+        sid_to_username.pop(sid, None)
+        username_to_sid.pop(userId, None)
 
-    if not userId or userId not in connected_users:
-        return
-
-    logger.info(f"Client disconnected: {sid} (userId: {userId})")
-
-    # Instead of removing the user, we can mark them as offline.
-    # For a simple online list, removing them is also fine. Let's remove for now.
-    del connected_users[userId]
-
-    await sio.emit("user_list", list(connected_users.values()))
+    # Broadcast updated user list to all remaining clients
+    online_users_list = [
+        {"username": u["username"], "status": u["status"]}
+        for u in connected_users.values()
+    ]
+    
+    logger.info(f"Broadcasting updated user list after disconnect: {online_users_list}")
+    await sio.emit("user_list", online_users_list)  # Broadcast to all
 
 
 @sio.event
@@ -753,6 +758,7 @@ async def typing_start(sid, data):
     recipient_username = data.get("recipient_username")
 
     if not sender_username or not recipient_username:
+        logger.warning(f"typing_start: Missing sender ({sender_username}) or recipient ({recipient_username})")
         return
 
     recipient_sid = username_to_sid.get(recipient_username)
@@ -764,8 +770,11 @@ async def typing_start(sid, data):
             {"username": sender_username},
             room=recipient_sid,
         )
+    else:
+        logger.info(f"Recipient {recipient_username} is not online")
 
 
+# Replace the existing typing_stop event  
 @sio.event
 async def typing_stop(sid, data):
     """Broadcast when a user stops typing to a specific recipient."""
@@ -773,6 +782,7 @@ async def typing_stop(sid, data):
     recipient_username = data.get("recipient_username")
 
     if not sender_username or not recipient_username:
+        logger.warning(f"typing_stop: Missing sender ({sender_username}) or recipient ({recipient_username})")
         return
 
     recipient_sid = username_to_sid.get(recipient_username)
@@ -783,6 +793,8 @@ async def typing_stop(sid, data):
             {"username": sender_username},
             room=recipient_sid,
         )
+    else:
+        logger.info(f"Recipient {recipient_username} is not online")
 
 
 # --- Server Startup ---
