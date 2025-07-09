@@ -16,7 +16,7 @@ from urllib.parse import parse_qs
 import sqlite3
 from passlib.context import CryptContext
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 
 
 # --- Pydantic Models for Request Bodies ---
@@ -83,6 +83,7 @@ def get_db_connection():
 
 
 def init_db():
+    """Initialize database with all required tables including call history."""
     conn = get_db_connection()
     
     # Users table
@@ -144,7 +145,7 @@ def init_db():
         """
     )
     
-    # Group Messages table - FIXED with all required columns
+    # Group Messages table
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS group_messages (
@@ -163,6 +164,32 @@ def init_db():
         )
         """
     )
+    
+    # Call History table - NEW
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS call_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            caller_username TEXT NOT NULL,
+            receiver_username TEXT NOT NULL,
+            call_type TEXT NOT NULL CHECK(call_type IN ('audio', 'video')),
+            call_status TEXT NOT NULL CHECK(call_status IN ('completed', 'missed', 'rejected', 'failed', 'cancelled')),
+            duration INTEGER DEFAULT 0,
+            started_at TEXT NOT NULL,
+            ended_at TEXT,
+            owner_username TEXT NOT NULL,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (caller_username) REFERENCES users (username),
+            FOREIGN KEY (receiver_username) REFERENCES users (username),
+            FOREIGN KEY (owner_username) REFERENCES users (username)
+        )
+        """
+    )
+    
+    # Create indexes for call history performance
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_call_history_owner ON call_history(owner_username)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_call_history_date ON call_history(started_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_call_history_status ON call_history(call_status)")
     
     conn.commit()
     conn.close()
@@ -200,7 +227,7 @@ async def cleanup_large_files():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     logger.info("Starting up application...")
-    init_db()  # This will now include migration
+    init_db()  # Initialize database with call history table
     cleanup_task = asyncio.create_task(cleanup_large_files())
     yield
     logger.info("Shutting down application...")
@@ -243,11 +270,11 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 templates = Jinja2Templates(directory="templates")
 
 # --- Data Structures ---
-connected_users = {}
-call_sessions = {}
-uploaded_files = {}
-sid_to_username = {}
-username_to_sid = {}
+connected_users: Dict[str, Dict[str, Any]] = {}
+call_sessions: Dict[str, Any] = {}
+uploaded_files: Dict[str, Dict[str, Any]] = {}
+sid_to_username: Dict[str, str] = {}
+username_to_sid: Dict[str, str] = {}
 
 # Broadcast control
 _broadcasting_user_list = False
@@ -302,6 +329,64 @@ async def broadcast_user_list():
             logger.error(f"Error broadcasting user list: {e}")
         finally:
             _broadcasting_user_list = False
+
+
+# --- Call History Helper Function ---
+async def save_call_to_history(
+    caller_username: str,
+    receiver_username: str, 
+    call_type: str,
+    call_status: str,
+    duration: int = 0,
+    started_at: Optional[str] = None,
+    ended_at: Optional[str] = None
+) -> None:
+    """Save call history entry to database with proper type validation."""
+    try:
+        # Validate required parameters
+        if not caller_username or not receiver_username:
+            logger.error(f"Invalid usernames for call history: caller='{caller_username}', receiver='{receiver_username}'")
+            return
+            
+        if call_type not in ['audio', 'video']:
+            logger.error(f"Invalid call type: {call_type}")
+            call_type = 'audio'  # Default fallback
+            
+        if call_status not in ['completed', 'missed', 'rejected', 'failed', 'cancelled']:
+            logger.error(f"Invalid call status: {call_status}")
+            call_status = 'failed'  # Default fallback
+
+        conn = get_db_connection()
+        
+        now = datetime.now(timezone.utc).isoformat()
+        started_at = started_at or now
+        
+        # Insert call history for both caller and receiver
+        entries = [
+            (caller_username, receiver_username, caller_username, call_status),
+            (caller_username, receiver_username, receiver_username, 
+             "missed" if call_status == "rejected" and caller_username != receiver_username else call_status)
+        ]
+        
+        for caller, receiver, owner, status in entries:
+            try:
+                conn.execute("""
+                    INSERT INTO call_history (
+                        caller_username, receiver_username, call_type, call_status,
+                        duration, started_at, ended_at, owner_username, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (caller, receiver, call_type, status, duration, started_at, ended_at, owner, now))
+            except sqlite3.Error as e:
+                logger.error(f"Error inserting call history entry: {e}")
+                continue
+        
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Call history saved: {caller_username} -> {receiver_username} ({call_type}, {call_status})")
+        
+    except Exception as e:
+        logger.error(f"Error saving call history: {e}")
 
 
 # --- API Routes ---
@@ -361,7 +446,159 @@ async def login_user(user: UserLogin):
     return {"message": "Login successful", "username": user.username}
 
 
-# --- GROUP ENDPOINTS ---
+# --- Call History API Endpoints ---
+@app.get("/api/call-history/{username}")
+async def get_call_history(username: str, limit: int = 50):
+    """Get call history for a user with proper validation."""
+    try:
+        if not username or len(username.strip()) == 0:
+            return {"success": False, "error": "Username is required"}
+            
+        if limit <= 0 or limit > 1000:
+            limit = 50  # Default safe limit
+        
+        conn = get_db_connection()
+        
+        result = conn.execute("""
+            SELECT 
+                id, caller_username, receiver_username, call_type, call_status,
+                duration, started_at, ended_at, created_at
+            FROM call_history 
+            WHERE owner_username = ?
+            ORDER BY started_at DESC
+            LIMIT ?
+        """, (username.strip(), limit)).fetchall()
+        
+        conn.close()
+        
+        call_history = []
+        for row in result:
+            call_history.append({
+                "id": row["id"],
+                "caller_username": row["caller_username"],
+                "receiver_username": row["receiver_username"],
+                "call_type": row["call_type"],
+                "call_status": row["call_status"],
+                "duration": row["duration"],
+                "started_at": row["started_at"],
+                "ended_at": row["ended_at"],
+                "created_at": row["created_at"]
+            })
+        
+        return {"success": True, "call_history": call_history}
+        
+    except Exception as e:
+        logger.error(f"Error getting call history: {e}")
+        return {"success": False, "error": "Failed to retrieve call history"}
+
+
+@app.get("/api/call-stats/{username}")
+async def get_call_stats(username: str):
+    """Get call statistics for a user with proper validation."""
+    try:
+        if not username or len(username.strip()) == 0:
+            return {"success": False, "error": "Username is required"}
+        
+        conn = get_db_connection()
+        
+        result = conn.execute("""
+            SELECT 
+                COUNT(*) as total_calls,
+                SUM(CASE WHEN call_status = 'missed' THEN 1 ELSE 0 END) as missed_calls,
+                SUM(CASE WHEN call_status = 'completed' THEN 1 ELSE 0 END) as completed_calls,
+                SUM(CASE WHEN call_status = 'rejected' THEN 1 ELSE 0 END) as rejected_calls,
+                SUM(CASE WHEN call_type = 'audio' THEN 1 ELSE 0 END) as audio_calls,
+                SUM(CASE WHEN call_type = 'video' THEN 1 ELSE 0 END) as video_calls,
+                SUM(CASE WHEN call_status = 'completed' THEN duration ELSE 0 END) as total_duration
+            FROM call_history 
+            WHERE owner_username = ?
+        """, (username.strip(),)).fetchone()
+        
+        conn.close()
+        
+        return {
+            "success": True,
+            "stats": {
+                "total_calls": result["total_calls"] or 0,
+                "missed_calls": result["missed_calls"] or 0,
+                "completed_calls": result["completed_calls"] or 0,
+                "rejected_calls": result["rejected_calls"] or 0,
+                "audio_calls": result["audio_calls"] or 0,
+                "video_calls": result["video_calls"] or 0,
+                "total_duration": result["total_duration"] or 0,
+            }
+        }
+        
+    except Exception as e:
+        logger.error(f"Error getting call stats: {e}")
+        return {"success": False, "error": "Failed to retrieve call statistics"}
+
+
+# --- DELETE Call History Entry ---
+@app.delete("/api/call-history/{username}/{call_id}")
+async def delete_call_history_entry(username: str, call_id: int):
+    """Delete a specific call history entry."""
+    try:
+        if not username or len(username.strip()) == 0:
+            return {"success": False, "error": "Username is required"}
+        
+        conn = get_db_connection()
+        
+        # Verify ownership
+        existing_entry = conn.execute(
+            "SELECT id FROM call_history WHERE id = ? AND owner_username = ?",
+            (call_id, username.strip())
+        ).fetchone()
+        
+        if not existing_entry:
+            conn.close()
+            return {"success": False, "error": "Call history entry not found"}
+        
+        # Delete the entry
+        conn.execute(
+            "DELETE FROM call_history WHERE id = ? AND owner_username = ?",
+            (call_id, username.strip())
+        )
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Call history entry {call_id} deleted for user {username}")
+        return {"success": True, "message": "Call history entry deleted"}
+        
+    except Exception as e:
+        logger.error(f"Error deleting call history entry: {e}")
+        return {"success": False, "error": "Failed to delete call history entry"}
+
+
+# --- CLEAR All Call History ---
+@app.delete("/api/call-history/{username}")
+async def clear_call_history(username: str):
+    """Clear all call history for a user."""
+    try:
+        if not username or len(username.strip()) == 0:
+            return {"success": False, "error": "Username is required"}
+        
+        conn = get_db_connection()
+        
+        # Delete all entries for this user
+        result = conn.execute(
+            "DELETE FROM call_history WHERE owner_username = ?",
+            (username.strip(),)
+        )
+        
+        deleted_count = result.rowcount
+        conn.commit()
+        conn.close()
+        
+        logger.info(f"Cleared {deleted_count} call history entries for user {username}")
+        return {"success": True, "message": f"Cleared {deleted_count} call history entries"}
+        
+    except Exception as e:
+        logger.error(f"Error clearing call history: {e}")
+        return {"success": False, "error": "Failed to clear call history"}
+
+
+# --- GROUP ENDPOINTS (keeping existing code) ---
 @app.post("/groups", response_model=dict)
 async def create_group_endpoint(group_data: GroupCreate):
     """Create a new group with the specified members."""
@@ -917,7 +1154,8 @@ async def remove_member_endpoint(group_id: int, username: str, current_user: str
     finally:
         conn.close()
 
-# --- FILE UPLOAD ---
+
+# --- FILE UPLOAD (keeping existing code) ---
 @app.post("/upload")
 async def upload_file(
     file: UploadFile = File(...),
@@ -1037,9 +1275,10 @@ async def download_file(file_id: str):
 
 
 # --- SOCKET.IO EVENTS ---
+
 @sio.event
 async def connect(sid, environ, auth):
-    """Handle client connection."""
+    """Handle client connection with enhanced call support."""
     try:
         logger.info(f"=== CONNECTION ATTEMPT ===")
         logger.info(f"SID: {sid}")
@@ -1076,11 +1315,12 @@ async def connect(sid, environ, auth):
             if old_sid in sid_to_username:
                 del sid_to_username[old_sid]
 
-        # Add user to connected list
+        # Add user to connected list with call capabilities
         connected_users[sid] = {
             "username": username,
-            "sid": sid,
             "status": "online",
+            "call_capable": True,  # Mark user as call-capable
+            "connected_at": datetime.now(timezone.utc).isoformat()
         }
         
         sid_to_username[sid] = username
@@ -1118,21 +1358,41 @@ async def connect(sid, environ, auth):
 
 @sio.event
 async def disconnect(sid):
-    """Handle client disconnection."""
+    """Handle user disconnection with call cleanup."""
     username = sid_to_username.get(sid)
     logger.info(f"User disconnecting: {username} (SID: {sid})")
 
     try:
         # Handle call cleanup
-        if sid in call_sessions:
-            partner_sid = call_sessions[sid]
-            await sio.emit("call_ended", {"reason": "Partner disconnected"}, room=partner_sid)
+        partner_sid = call_sessions.get(sid)
+        if partner_sid:
+            # Get call session info
+            session_data = call_sessions.get(sid, {})
+            if isinstance(session_data, dict):
+                caller_username = session_data.get("caller_username")
+                target_username = session_data.get("target_username")
+                call_start_time = session_data.get("call_start_time")
+                call_type = session_data.get("call_type", "audio")
+                
+                # Save interrupted call to history
+                if caller_username and target_username and call_start_time:
+                    await save_call_to_history(
+                        caller_username, target_username, call_type, "cancelled",
+                        0, call_start_time, datetime.now(timezone.utc).isoformat()
+                    )
             
+            # Notify partner about disconnection
+            await sio.emit("call_ended", {
+                "reason": "The other user disconnected."
+            }, room=partner_sid)
+            
+            # Reset partner status
             if partner_sid in connected_users:
                 connected_users[partner_sid]["status"] = "online"
             
-            call_sessions.pop(partner_sid, None)
+            # Clean up sessions
             call_sessions.pop(sid, None)
+            call_sessions.pop(partner_sid, None)
 
         # Clean up user data
         if username:
@@ -1155,6 +1415,284 @@ async def request_user_list(sid):
     await broadcast_user_list()
 
 
+@sio.event
+async def update_user_status(sid, data):
+    """Allow users to manually update their status."""
+    if sid not in connected_users:
+        return
+    
+    new_status = data.get("status", "online")
+    if new_status in ["online", "away", "busy"]:
+        connected_users[sid]["status"] = new_status
+        await broadcast_user_list()
+        logger.info(f"User {connected_users[sid]['username']} status updated to {new_status}")
+
+
+# --- ENHANCED CALL HANDLING WITH HISTORY TRACKING ---
+
+@sio.event
+async def call_request(sid, data):
+    """Handle call request from one user to another with history tracking."""
+    if not isinstance(data, dict) or "target_username" not in data:
+        logger.error(f"Malformed call_request from {sid}: {data}")
+        await sio.emit("call_error", {"message": "Invalid call request format."}, room=sid)
+        return
+
+    target_username: Optional[str] = data.get("target_username")
+    call_type: str = data.get("callType", "audio")  # Default to audio if not specified
+    caller_username: Optional[str] = connected_users.get(sid, {}).get("username")
+
+    if not caller_username:
+        await sio.emit("call_error", {"message": "You must be logged in to make calls."}, room=sid)
+        return
+
+    if not target_username:
+        await sio.emit("call_error", {"message": "Target username is required."}, room=sid)
+        return
+
+    logger.info(f"Call request from {caller_username} to {target_username} (type: {call_type})")
+
+    # Find the target user's socket ID
+    target_sid: Optional[str] = None
+    for user_sid, user_info in connected_users.items():
+        if user_info.get("username") == target_username:
+            target_sid = user_sid
+            break
+
+    if not target_sid:
+        # Save failed call attempt to history
+        await save_call_to_history(
+            caller_username, target_username, call_type, "failed", 
+            0, datetime.now(timezone.utc).isoformat()
+        )
+        await sio.emit("call_error", {"message": f"User '{target_username}' is not online."}, room=sid)
+        return
+
+    # Check if target user is available for calls
+    target_status = connected_users[target_sid].get("status", "offline")
+    if target_status in ["in_call", "ringing"]:
+        # Save failed call attempt to history
+        await save_call_to_history(
+            caller_username, target_username, call_type, "failed",
+            0, datetime.now(timezone.utc).isoformat()
+        )
+        await sio.emit("call_error", {"message": "User is currently in another call."}, room=sid)
+        return
+
+    if target_status != "online":
+        # Save failed call attempt to history
+        await save_call_to_history(
+            caller_username, target_username, call_type, "failed",
+            0, datetime.now(timezone.utc).isoformat()
+        )
+        await sio.emit("call_error", {"message": f"User is currently busy ({target_status})."}, room=sid)
+        return
+
+    # Set statuses to 'ringing'
+    connected_users[sid]["status"] = "ringing"
+    connected_users[target_sid]["status"] = "ringing"
+    
+    # Store call start time and session info
+    call_start_time = datetime.now(timezone.utc).isoformat()
+    
+    # Initialize call sessions as dictionaries if they don't exist
+    if not isinstance(call_sessions.get(sid), dict):
+        call_sessions[sid] = {}
+    if not isinstance(call_sessions.get(target_sid), dict):
+        call_sessions[target_sid] = {}
+    
+    # Store call session data
+    call_session_data = {
+        "call_start_time": call_start_time,
+        "call_type": call_type,
+        "caller_username": caller_username,
+        "target_username": target_username,
+        "partner_sid": target_sid
+    }
+    
+    call_sessions[sid].update(call_session_data)
+    call_sessions[target_sid].update({
+        **call_session_data,
+        "partner_sid": sid
+    })
+    
+    await broadcast_user_list()
+
+    # Emit the incoming call event to the target user with call type
+    await sio.emit("incoming_call", {
+        "caller_id": sid, 
+        "caller_username": caller_username,
+        "callType": call_type
+    }, room=target_sid)
+
+
+@sio.event
+async def call_response(sid, data):
+    """Handle the response to a call invitation (accept/reject) with history tracking."""
+    if not isinstance(data, dict) or "caller_id" not in data or "accepted" not in data:
+        logger.error(f"Malformed call_response from {sid}: {data}")
+        return
+
+    caller_id: Optional[str] = data.get("caller_id")
+    accepted: bool = data.get("accepted", False)
+    call_type: str = data.get("callType", "audio")
+
+    if caller_id not in connected_users:
+        logger.warning(f"{sid} responded to a call from a non-existent user {caller_id}")
+        return
+
+    # Get call session info with proper type checking
+    call_session = call_sessions.get(sid, {})
+    if not isinstance(call_session, dict):
+        logger.error(f"Invalid call session for {sid}")
+        return
+
+    call_start_time: Optional[str] = call_session.get("call_start_time")
+    caller_username: Optional[str] = call_session.get("caller_username")
+    target_username: Optional[str] = call_session.get("target_username")
+    responder_username: Optional[str] = connected_users[sid].get("username")
+
+    if not all([caller_username, target_username, responder_username]):
+        logger.error(f"Missing required usernames for call response: caller={caller_username}, target={target_username}, responder={responder_username}")
+        return
+
+    if accepted:
+        logger.info(f"{call_type.capitalize()} call accepted between {caller_id} and {sid}")
+        
+        # Update call sessions to store partner SID
+        call_sessions[sid] = caller_id
+        call_sessions[caller_id] = sid
+        
+        connected_users[sid]["status"] = "in_call"
+        connected_users[caller_id]["status"] = "in_call"
+
+        await sio.emit("call_accepted", {
+            "responder_id": sid,
+            "callType": call_type
+        }, room=caller_id)
+    else:
+        logger.info(f"{call_type.capitalize()} call rejected by {sid} for caller {caller_id}")
+        
+        # Save rejected/missed call to history
+        if caller_username and call_start_time and responder_username:
+            end_time = datetime.now(timezone.utc).isoformat()
+            await save_call_to_history(
+                caller_username, responder_username, call_type, "rejected",
+                0, call_start_time, end_time
+            )
+        
+        connected_users[caller_id]["status"] = "online"
+        connected_users[sid]["status"] = "online"
+        
+        # Clean up call session
+        call_sessions.pop(sid, None)
+        call_sessions.pop(caller_id, None)
+        
+        await sio.emit("call_rejected", {
+            "responder_username": responder_username,
+            "callType": call_type
+        }, room=caller_id)
+
+    await broadcast_user_list()
+
+
+@sio.event
+async def end_call(sid):
+    """Handle call ending initiated by one of the participants with history tracking."""
+    partner_sid = call_sessions.get(sid)
+    
+    if not partner_sid:
+        logger.warning(f"No active call session found for {sid}")
+        return
+        
+    logger.info(f"Call ended by {sid}. Notifying partner {partner_sid}")
+
+    # Get call session info for history tracking
+    caller_username: Optional[str] = None
+    target_username: Optional[str] = None
+    call_start_time: Optional[str] = None
+    call_type: str = "audio"
+    
+    # Try to get call info from either participant's session
+    for session_sid in [sid, partner_sid]:
+        session_data = call_sessions.get(session_sid)
+        if isinstance(session_data, dict):
+            caller_username = session_data.get("caller_username")
+            target_username = session_data.get("target_username")
+            call_start_time = session_data.get("call_start_time")
+            call_type = session_data.get("call_type", "audio")
+            break
+
+    # Calculate call duration and save to history
+    if caller_username and target_username and call_start_time:
+        try:
+            end_time = datetime.now(timezone.utc)
+            start_time = datetime.fromisoformat(call_start_time.replace('Z', '+00:00'))
+            duration = max(0, int((end_time - start_time).total_seconds()))
+            
+            await save_call_to_history(
+                caller_username, target_username, call_type, "completed",
+                duration, call_start_time, end_time.isoformat()
+            )
+        except Exception as e:
+            logger.error(f"Error calculating call duration: {e}")
+            # Save without duration if calculation fails
+            await save_call_to_history(
+                caller_username, target_username, call_type, "completed",
+                0, call_start_time, datetime.now(timezone.utc).isoformat()
+            )
+
+    await sio.emit("call_ended", {
+        "reason": "The call was ended by your partner."
+    }, room=partner_sid)
+
+    # Reset statuses
+    if sid in connected_users:
+        connected_users[sid]["status"] = "online"
+    if partner_sid in connected_users:
+        connected_users[partner_sid]["status"] = "online"
+
+    # Clean up session for both users
+    call_sessions.pop(sid, None)
+    call_sessions.pop(partner_sid, None)
+
+    await broadcast_user_list()
+
+
+# --- Enhanced WebRTC Signaling Events with Call Type Support ---
+async def forward_webrtc_event(sid, event_name, data):
+    """Generic handler to forward WebRTC data to the call partner."""
+    if sid not in call_sessions:
+        logger.warning(f"{event_name} received from {sid} who is not in a call.")
+        return
+
+    partner_sid = call_sessions[sid]
+    logger.info(f"Forwarding {event_name} from {sid} to {partner_sid}")
+    
+    # Ensure callType is preserved in WebRTC signaling
+    if "callType" not in data and sid in connected_users:
+        # Try to infer call type or set default
+        data["callType"] = "audio"  # Default fallback
+    
+    await sio.emit(event_name, data, room=partner_sid)
+
+
+@sio.event
+async def webrtc_offer(sid, data):
+    await forward_webrtc_event(sid, "webrtc_offer", data)
+
+
+@sio.event
+async def webrtc_answer(sid, data):
+    await forward_webrtc_event(sid, "webrtc_answer", data)
+
+
+@sio.event
+async def webrtc_ice_candidate(sid, data):
+    await forward_webrtc_event(sid, "webrtc_ice_candidate", data)
+
+
+# --- MESSAGE HANDLING ---
 @sio.event
 async def message(sid, data):
     """Handle incoming messages - UNIFIED for both direct and group messages."""
@@ -1236,7 +1774,7 @@ async def message(sid, data):
         await sio.emit("error", {"message": "Failed to send message"}, room=sid)
 
 
-# --- TYPING EVENTS - UNIFIED HANDLING ---
+# --- TYPING EVENTS ---
 @sio.event
 async def typing_start(sid, data):
     """Handle typing start for both direct messages and groups."""
@@ -1388,7 +1926,7 @@ async def delete_message_event(sid, data):
         conn = get_db_connection()
         
         if group_id:
-            # FIXED: Handle group message deletion properly
+            # Handle group message deletion
             if delete_for_everyone:
                 # For delete for everyone, check if user is admin or message sender
                 message_check = conn.execute(
@@ -1415,12 +1953,10 @@ async def delete_message_event(sid, data):
                 )
             else:
                 # For delete for me only, just mark as deleted for this user
-                # We could implement a separate table for user-specific deletions
-                # For now, we'll only allow delete for everyone in groups for simplicity
                 await sio.emit("delete_error", {"error": "Only 'delete for everyone' is supported in groups"}, room=sid)
                 return
         else:
-            # Handle direct message deletion (existing logic)
+            # Handle direct message deletion
             if delete_for_everyone:
                 # Check if user is the sender
                 message_check = conn.execute(
@@ -1467,116 +2003,6 @@ async def delete_message_event(sid, data):
     except Exception as e:
         logger.error(f"Error in delete_message_event: {e}")
         await sio.emit("delete_error", {"error": "Failed to delete message"}, room=sid)
-
-
-# --- CALL HANDLING ---
-@sio.event
-async def call_request(sid, data):
-    """Handle a user's request to call another user."""
-    if not isinstance(data, dict) or "target_user_id" not in data:
-        logger.error(f"Malformed call_request from {sid}: {data}")
-        return
-
-    target_sid = data.get("target_user_id")
-    caller_username = connected_users.get(sid, {}).get("username", f"User-{sid[:8]}")
-
-    if not target_sid or target_sid not in connected_users:
-        await sio.emit("call_error", {"message": "The user you are trying to call is offline."}, room=sid)
-        return
-
-    if connected_users[target_sid].get("status") != "online":
-        status = connected_users[target_sid].get("status", "unavailable")
-        await sio.emit("call_error", {"message": f"User is currently busy ({status})."}, room=sid)
-        return
-
-    # Set statuses to 'Ringing'
-    connected_users[sid]["status"] = "ringing"
-    connected_users[target_sid]["status"] = "ringing"
-    
-    await broadcast_user_list()
-
-    # Emit the incoming call event to the target user
-    await sio.emit("incoming_call", {"caller_id": sid, "caller_username": caller_username}, room=target_sid)
-
-
-@sio.event
-async def call_response(sid, data):
-    """Handle the response to a call invitation (accept/reject)."""
-    if not isinstance(data, dict) or "caller_id" not in data or "accepted" not in data:
-        logger.error(f"Malformed call_response from {sid}: {data}")
-        return
-
-    caller_id = data.get("caller_id")
-    accepted = data.get("accepted", False)
-
-    if caller_id not in connected_users:
-        logger.warning(f"{sid} responded to a call from a non-existent user {caller_id}")
-        return
-
-    if accepted:
-        logger.info(f"Call accepted between {caller_id} and {sid}")
-        call_sessions[sid] = caller_id
-        call_sessions[caller_id] = sid
-        connected_users[sid]["status"] = "in_call"
-        connected_users[caller_id]["status"] = "in_call"
-
-        await sio.emit("call_accepted", {"responder_id": sid}, room=caller_id)
-    else:
-        logger.info(f"Call rejected by {sid} for caller {caller_id}")
-        connected_users[caller_id]["status"] = "online"
-        connected_users[sid]["status"] = "online"
-        await sio.emit("call_rejected", {"responder_username": connected_users[sid]["username"]}, room=caller_id)
-
-    await broadcast_user_list()
-
-
-@sio.event
-async def end_call(sid):
-    """Handle call ending initiated by one of the participants."""
-    if sid in call_sessions:
-        partner_sid = call_sessions[sid]
-        logger.info(f"Call ended by {sid}. Notifying partner {partner_sid}")
-
-        await sio.emit("call_ended", {"reason": "The call was ended by your partner."}, room=partner_sid)
-
-        # Reset statuses
-        if sid in connected_users:
-            connected_users[sid]["status"] = "online"
-        if partner_sid in connected_users:
-            connected_users[partner_sid]["status"] = "online"
-
-        # Clean up session for both users
-        call_sessions.pop(sid, None)
-        call_sessions.pop(partner_sid, None)
-
-        await broadcast_user_list()
-
-
-# --- WebRTC Signaling Events ---
-async def forward_webrtc_event(sid, event_name, data):
-    """Generic handler to forward WebRTC data to the call partner."""
-    if sid not in call_sessions:
-        logger.warning(f"{event_name} received from {sid} who is not in a call.")
-        return
-
-    partner_sid = call_sessions[sid]
-    logger.info(f"Forwarding {event_name} from {sid} to {partner_sid}")
-    await sio.emit(event_name, data, room=partner_sid)
-
-
-@sio.event
-async def webrtc_offer(sid, data):
-    await forward_webrtc_event(sid, "webrtc_offer", data)
-
-
-@sio.event
-async def webrtc_answer(sid, data):
-    await forward_webrtc_event(sid, "webrtc_answer", data)
-
-
-@sio.event
-async def webrtc_ice_candidate(sid, data):
-    await forward_webrtc_event(sid, "webrtc_ice_candidate", data)
 
 
 # --- Server Startup ---
