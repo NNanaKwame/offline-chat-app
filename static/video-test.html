@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Call Debug Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .status {
+            background: #e8f4f8;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            border-left: 4px solid #007AFF;
+        }
+        .error {
+            background: #ffe6e6;
+            border-left-color: #ff4444;
+        }
+        .success {
+            background: #e6f7e6;
+            border-left-color: #44ff44;
+        }
+        button {
+            background: #007AFF;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        video {
+            width: 200px;
+            height: 150px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 10px;
+        }
+        .video-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Video Call Debug Test</h1>
+        
+        <div id="status" class="status">
+            Initializing...
+        </div>
+        
+        <div>
+            <button onclick="testCamera()">Test Camera</button>
+            <button onclick="testMicrophone()">Test Microphone</button>
+            <button onclick="testWebRTC()">Test WebRTC</button>
+            <button onclick="sendTestMessage()">Send Test Message to RN</button>
+        </div>
+        
+        <div class="video-container">
+            <video id="localVideo" autoplay muted playsinline></video>
+            <video id="remoteVideo" autoplay playsinline></video>
+        </div>
+        
+        <div id="logs"></div>
+    </div>
+
+    <script>
+        let localStream = null;
+        let peerConnection = null;
+        
+        function log(message, type = 'info') {
+            const now = new Date().toLocaleTimeString();
+            const logElement = document.getElementById('logs');
+            const className = type === 'error' ? 'error' : (type === 'success' ? 'success' : '');
+            logElement.innerHTML += `<div class="status ${className}">[${now}] ${message}</div>`;
+            logElement.scrollTop = logElement.scrollHeight;
+            console.log(`[${type}] ${message}`);
+        }
+        
+        function updateStatus(message, type = 'info') {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = message;
+            statusElement.className = `status ${type === 'error' ? 'error' : (type === 'success' ? 'success' : '')}`;
+            log(message, type);
+        }
+        
+        async function testCamera() {
+            try {
+                updateStatus('Testing camera access...');
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { width: 640, height: 480 },
+                    audio: false 
+                });
+                
+                document.getElementById('localVideo').srcObject = stream;
+                localStream = stream;
+                
+                updateStatus('Camera access successful!', 'success');
+                log(`Camera: ${stream.getVideoTracks().length} video tracks`);
+            } catch (error) {
+                updateStatus(`Camera test failed: ${error.message}`, 'error');
+                log(`Camera error: ${error}`, 'error');
+            }
+        }
+        
+        async function testMicrophone() {
+            try {
+                updateStatus('Testing microphone access...');
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: false,
+                    audio: true 
+                });
+                
+                updateStatus('Microphone access successful!', 'success');
+                log(`Microphone: ${stream.getAudioTracks().length} audio tracks`);
+                
+                // Stop the stream as we're just testing
+                stream.getTracks().forEach(track => track.stop());
+            } catch (error) {
+                updateStatus(`Microphone test failed: ${error.message}`, 'error');
+                log(`Microphone error: ${error}`, 'error');
+            }
+        }
+        
+        async function testWebRTC() {
+            try {
+                updateStatus('Testing WebRTC connection...');
+                
+                if (!localStream) {
+                    await testCamera();
+                }
+                
+                const config = {
+                    iceServers: [
+                        { urls: 'stun:stun.l.google.com:19302' }
+                    ]
+                };
+                
+                peerConnection = new RTCPeerConnection(config);
+                
+                peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        log(`ICE candidate: ${event.candidate.candidate}`);
+                    }
+                };
+                
+                peerConnection.onconnectionstatechange = () => {
+                    log(`Connection state: ${peerConnection.connectionState}`);
+                };
+                
+                // Add local stream
+                if (localStream) {
+                    localStream.getTracks().forEach(track => {
+                        peerConnection.addTrack(track, localStream);
+                    });
+                }
+                
+                // Create offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                
+                updateStatus('WebRTC test successful!', 'success');
+                log(`WebRTC offer created: ${offer.type}`);
+                
+            } catch (error) {
+                updateStatus(`WebRTC test failed: ${error.message}`, 'error');
+                log(`WebRTC error: ${error}`, 'error');
+            }
+        }
+        
+        function sendTestMessage() {
+            const message = {
+                type: 'test_message',
+                data: {
+                    timestamp: new Date().toISOString(),
+                    message: 'Hello from video call HTML!'
+                }
+            };
+            
+            if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify(message));
+                log('Test message sent to React Native');
+            } else {
+                log('ReactNativeWebView not available - running in browser?', 'error');
+            }
+        }
+        
+        // Listen for messages from React Native
+        window.addEventListener('message', (event) => {
+            try {
+                const data = JSON.parse(event.data);
+                log(`Received message from RN: ${JSON.stringify(data)}`);
+            } catch (error) {
+                log(`Error parsing message: ${error}`, 'error');
+            }
+        });
+        
+        // Initialize
+        document.addEventListener('DOMContentLoaded', () => {
+            updateStatus('Debug test page loaded successfully', 'success');
+            
+            // Send ready message
+            if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                    type: 'ready',
+                    data: { page: 'debug' }
+                }));
+            }
+        });
+    </script>
+</body>
+</html>

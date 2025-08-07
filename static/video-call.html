@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Call</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #000;
+            color: #fff;
+            overflow: hidden;
+        }
+        
+        .video-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .remote-video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            background: #1a1a1a;
+        }
+        
+        .local-video {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            width: 120px;
+            height: 160px;
+            border-radius: 12px;
+            object-fit: cover;
+            background: #2a2a2a;
+            border: 2px solid #333;
+        }
+        
+        .controls {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 20px;
+            z-index: 10;
+        }
+        
+        .control-btn {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: none;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            transition: all 0.2s;
+        }
+        
+        .control-btn:hover {
+            transform: scale(1.1);
+        }
+        
+        .mute-btn {
+            background: #333;
+            color: #fff;
+        }
+        
+        .mute-btn.muted {
+            background: #ff4444;
+        }
+        
+        .camera-btn {
+            background: #333;
+            color: #fff;
+        }
+        
+        .camera-btn.off {
+            background: #ff4444;
+        }
+        
+        .end-call-btn {
+            background: #ff4444;
+            color: #fff;
+        }
+        
+        .status {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px 16px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+        
+        .connecting {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 5;
+        }
+        
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #333;
+            border-top: 4px solid #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 16px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="video-container">
+        <video id="remoteVideo" class="remote-video" autoplay playsinline></video>
+        <video id="localVideo" class="local-video" autoplay playsinline muted></video>
+        
+        <div class="status" id="status">Connecting...</div>
+        
+        <div class="connecting" id="connecting">
+            <div class="spinner"></div>
+            <div>Connecting to call...</div>
+        </div>
+        
+        <div class="controls">
+            <button class="control-btn mute-btn" id="muteBtn">🎤</button>
+            <button class="control-btn camera-btn" id="cameraBtn">📹</button>
+            <button class="control-btn end-call-btn" id="endCallBtn">📞</button>
+        </div>
+    </div>
+
+    <script src="webview-permissions.js"></script>
+    <script>
+        class VideoCallManager {
+            constructor() {
+                this.localStream = null;
+                this.remoteStream = null;
+                this.peerConnection = null;
+                this.isInitiator = false;
+                this.isMuted = false;
+                this.isCameraOff = false;
+                this.callState = null;
+                
+                this.localVideo = document.getElementById('localVideo');
+                this.remoteVideo = document.getElementById('remoteVideo');
+                this.status = document.getElementById('status');
+                this.connecting = document.getElementById('connecting');
+                
+                this.setupEventListeners();
+                this.setupPeerConnection();
+                this.requestUserMedia();
+                
+                // Notify React Native that WebView is ready
+                this.postMessageToRN({ type: 'ready' });
+            }
+            
+            setupEventListeners() {
+                document.getElementById('muteBtn').addEventListener('click', () => this.toggleMute());
+                document.getElementById('cameraBtn').addEventListener('click', () => this.toggleCamera());
+                document.getElementById('endCallBtn').addEventListener('click', () => this.endCall());
+                
+                // Listen for messages from React Native
+                window.addEventListener('message', (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        this.handleRNMessage(data);
+                    } catch (error) {
+                        console.error('Error parsing message from RN:', error);
+                    }
+                });
+            }
+            
+            setupPeerConnection() {
+                // Local-only configuration - no external STUN servers
+                const config = {
+                    iceServers: []
+                };
+                
+                this.peerConnection = new RTCPeerConnection(config);
+                
+                this.peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        this.postMessageToRN({
+                            type: 'webrtc_ice_candidate',
+                            data: event.candidate
+                        });
+                    }
+                };
+                
+                this.peerConnection.ontrack = (event) => {
+                    this.remoteStream = event.streams[0];
+                    this.remoteVideo.srcObject = this.remoteStream;
+                    this.hideConnecting();
+                    this.updateStatus('Connected');
+                };
+                
+                this.peerConnection.onconnectionstatechange = () => {
+                    const state = this.peerConnection.connectionState;
+                    this.updateStatus(`Connection: ${state}`);
+                    
+                    if (state === 'connected') {
+                        this.hideConnecting();
+                    } else if (state === 'disconnected' || state === 'failed') {
+                        this.updateStatus('Call ended');
+                        setTimeout(() => this.endCall(), 2000);
+                    }
+                };
+            }
+            
+            async requestUserMedia() {
+                try {
+                    console.log('🎥 Requesting user media with hybrid permission system...');
+                    
+                    // Check if getUserMedia is available
+                    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                        throw new Error('getUserMedia not supported in this WebView');
+                    }
+                    
+                    // Request both video and audio with high quality
+                    const constraints = {
+                        video: {
+                            width: { ideal: 640, max: 1280 },
+                            height: { ideal: 480, max: 720 },
+                            frameRate: { ideal: 30, max: 60 },
+                            facingMode: 'user'
+                        },
+                        audio: {
+                            echoCancellation: true,
+                            noiseSuppression: true,
+                            autoGainControl: true,
+                            sampleRate: 44100
+                        }
+                    };
+                    
+                    console.log('📱 Requesting media with constraints:', constraints);
+                    this.updateStatus('Requesting camera and microphone access...');
+                    
+                    // This will trigger our hybrid permission system
+                    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+                    
+                    console.log('✅ Successfully got media stream:', stream);
+                    console.log('📊 Stream tracks:', stream.getTracks().map(track => `${track.kind}: ${track.label}`));
+                    
+                    this.localStream = stream;
+                    this.localVideo.srcObject = stream;
+                    
+                    // Add tracks to peer connection
+                    stream.getTracks().forEach(track => {
+                        console.log(`🎯 Adding ${track.kind} track:`, track.label);
+                        this.peerConnection.addTrack(track, stream);
+                    });
+                    
+                    this.updateStatus('Media ready - Camera and microphone active');
+                    this.postMessageToRN({ 
+                        type: 'media_ready',
+                        tracks: stream.getTracks().map(track => ({
+                            kind: track.kind,
+                            label: track.label,
+                            enabled: track.enabled
+                        }))
+                    });
+                    
+                } catch (error) {
+                    console.error('❌ Error accessing media devices:', error);
+                    this.updateStatus(`❌ Media access failed: ${error.message}`);
+                    this.postMessageToRN({ 
+                        type: 'media_error', 
+                        error: error.message,
+                        errorName: error.name
+                    });
+                    
+                    // Don't fallback to mock stream - show the user what's happening
+                    if (error.name === 'NotAllowedError') {
+                        this.updateStatus('❌ Camera/microphone access denied. Please grant permissions.');
+                    } else if (error.name === 'NotFoundError') {
+                        this.updateStatus('❌ No camera/microphone found on device.');
+                    } else {
+                        this.updateStatus(`❌ Media error: ${error.message}`);
+                    }
+                }
+            }
+            
+            // Retry media access after permission grant
+            async retryMediaAccess() {
+                console.log('🔄 Retrying media access after permission grant...');
+                try {
+                    await this.requestUserMedia();
+                } catch (error) {
+                    console.error('❌ Retry failed:', error);
+                    this.updateStatus('❌ Unable to access camera/microphone even after permission grant');
+                }
+            }
+            
+            async handleRNMessage(data) {
+                console.log('📨 Handling message from React Native:', data);
+                
+                switch (data.type) {
+                    case 'call_state':
+                        this.callState = data.state;
+                        this.isInitiator = data.state.isInitiator;
+                        
+                        if (this.isInitiator && this.localStream) {
+                            await this.createOffer();
+                        }
+                        break;
+                        
+                    case 'socket_webrtc_offer':
+                        await this.handleOffer(data.data);
+                        break;
+                        
+                    case 'socket_webrtc_answer':
+                        await this.handleAnswer(data.data);
+                        break;
+                        
+                    case 'socket_webrtc_ice_candidate':
+                        await this.handleIceCandidate(data.data);
+                        break;
+                        
+                    case 'permissions_granted':
+                        console.log('🎉 Permissions granted by React Native!');
+                        this.updateStatus('Permissions granted - accessing camera/microphone...');
+                        await this.retryMediaAccess();
+                        break;
+                        
+                    case 'permissions_denied':
+                        console.log('❌ Permissions denied by React Native');
+                        this.updateStatus('❌ Camera/microphone access denied');
+                        break;
+                }
+            }
+            
+            async createOffer() {
+                try {
+                    const offer = await this.peerConnection.createOffer();
+                    await this.peerConnection.setLocalDescription(offer);
+                    
+                    this.postMessageToRN({
+                        type: 'webrtc_offer',
+                        data: offer
+                    });
+                    
+                    this.updateStatus('Calling...');
+                } catch (error) {
+                    console.error('Error creating offer:', error);
+                }
+            }
+            
+            async handleOffer(offer) {
+                try {
+                    await this.peerConnection.setRemoteDescription(offer);
+                    const answer = await this.peerConnection.createAnswer();
+                    await this.peerConnection.setLocalDescription(answer);
+                    
+                    this.postMessageToRN({
+                        type: 'webrtc_answer',
+                        data: answer
+                    });
+                    
+                    this.updateStatus('Answering...');
+                } catch (error) {
+                    console.error('Error handling offer:', error);
+                }
+            }
+            
+            async handleAnswer(answer) {
+                try {
+                    await this.peerConnection.setRemoteDescription(answer);
+                    this.updateStatus('Connecting...');
+                } catch (error) {
+                    console.error('Error handling answer:', error);
+                }
+            }
+            
+            async handleIceCandidate(candidate) {
+                try {
+                    await this.peerConnection.addIceCandidate(candidate);
+                } catch (error) {
+                    console.error('Error adding ICE candidate:', error);
+                }
+            }
+            
+            toggleMute() {
+                if (this.localStream) {
+                    const audioTrack = this.localStream.getAudioTracks()[0];
+                    if (audioTrack) {
+                        audioTrack.enabled = !audioTrack.enabled;
+                        this.isMuted = !audioTrack.enabled;
+                        
+                        const muteBtn = document.getElementById('muteBtn');
+                        muteBtn.classList.toggle('muted', this.isMuted);
+                        muteBtn.textContent = this.isMuted ? '🔇' : '🎤';
+                    }
+                }
+            }
+            
+            toggleCamera() {
+                if (this.localStream) {
+                    const videoTrack = this.localStream.getVideoTracks()[0];
+                    if (videoTrack) {
+                        videoTrack.enabled = !videoTrack.enabled;
+                        this.isCameraOff = !videoTrack.enabled;
+                        
+                        const cameraBtn = document.getElementById('cameraBtn');
+                        cameraBtn.classList.toggle('off', this.isCameraOff);
+                        cameraBtn.textContent = this.isCameraOff ? '📷' : '📹';
+                    }
+                }
+            }
+            
+            endCall() {
+                this.cleanup();
+                this.postMessageToRN({ type: 'call_ended' });
+            }
+            
+            cleanup() {
+                if (this.localStream) {
+                    this.localStream.getTracks().forEach(track => track.stop());
+                }
+                if (this.peerConnection) {
+                    this.peerConnection.close();
+                }
+            }
+            
+            updateStatus(message) {
+                this.status.textContent = message;
+            }
+            
+            hideConnecting() {
+                this.connecting.style.display = 'none';
+            }
+            
+            postMessageToRN(message) {
+                if (window.ReactNativeWebView) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify(message));
+                }
+            }
+        }
+        
+        // Initialize video call manager when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new VideoCallManager();
+        });
+    </script>
+</body>
+</html>

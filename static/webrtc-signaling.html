@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Signaling</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        .hidden {
+            position: absolute;
+            top: -1000px;
+            left: -1000px;
+            width: 1px;
+            height: 1px;
+        }
+    </style>
+</head>
+<body>
+    <div class="hidden" id="container">
+        <div id="status">Initializing WebRTC signaling...</div>
+    </div>
+
+    <script>
+        class WebRTCSignaling {
+            constructor() {
+                this.peerConnection = null;
+                this.isInitiator = false;
+                this.callState = null;
+                this.isMuted = false;
+                this.isCameraOff = false;
+                
+                this.setupPeerConnection();
+                this.setupEventListeners();
+                
+                console.log('🚀 WebRTC Signaling initialized');
+                this.postMessageToRN({ type: 'ready' });
+            }
+            
+            setupEventListeners() {
+                // Listen for messages from React Native
+                window.addEventListener('message', (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+                        this.handleRNMessage(data);
+                    } catch (error) {
+                        console.error('Error parsing message from RN:', error);
+                    }
+                });
+            }
+            
+            setupPeerConnection() {
+                // Local-only configuration for development
+                const config = {
+                    iceServers: []
+                };
+                
+                this.peerConnection = new RTCPeerConnection(config);
+                
+                this.peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        console.log('🧊 Sending ICE candidate');
+                        this.postMessageToRN({
+                            type: 'webrtc_ice_candidate',
+                            data: event.candidate
+                        });
+                    }
+                };
+                
+                this.peerConnection.ontrack = (event) => {
+                    console.log('📺 Received remote track:', event.track.kind);
+                    console.log('📺 Remote stream:', event.streams[0]);
+                    this.postMessageToRN({
+                        type: 'remote_track_received',
+                        trackKind: event.track.kind,
+                        streamId: event.streams[0]?.id
+                    });
+                };
+                
+                this.peerConnection.onconnectionstatechange = () => {
+                    const state = this.peerConnection.connectionState;
+                    console.log('🔗 Connection state:', state);
+                    this.postMessageToRN({
+                        type: 'connection_state_changed',
+                        state: state
+                    });
+                    
+                    if (state === 'connected') {
+                        console.log('✅ WebRTC connection established');
+                    } else if (state === 'disconnected' || state === 'failed') {
+                        console.log('❌ WebRTC connection lost');
+                        setTimeout(() => this.endCall(), 2000);
+                    }
+                };
+
+                // Add placeholder tracks for signaling
+                this.addPlaceholderTracks();
+            }
+
+            addPlaceholderTracks() {
+                try {
+                    // Create a minimal audio context for audio track
+                    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                    const oscillator = audioContext.createOscillator();
+                    const gainNode = audioContext.createGain();
+                    gainNode.gain.value = 0; // Silent
+                    oscillator.connect(gainNode);
+                    
+                    // Create canvas for video track
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 640;
+                    canvas.height = 480;
+                    const ctx = canvas.getContext('2d');
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    
+                    const videoStream = canvas.captureStream(30);
+                    
+                    // Add tracks to peer connection for signaling
+                    if (videoStream.getVideoTracks().length > 0) {
+                        this.peerConnection.addTrack(videoStream.getVideoTracks()[0], videoStream);
+                        console.log('📹 Added placeholder video track');
+                    }
+                    
+                } catch (error) {
+                    console.error('Error adding placeholder tracks:', error);
+                }
+            }
+
+            async requestNativePermissions() {
+                console.log('🔑 Requesting native permissions via bridge');
+                this.postMessageToRN({ type: 'request_permissions' });
+                
+                // Wait for permissions to be granted
+                return new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Permission request timeout'));
+                    }, 10000);
+                    
+                    const permissionListener = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            if (data.type === 'permissions_granted') {
+                                clearTimeout(timeout);
+                                window.removeEventListener('message', permissionListener);
+                                resolve(data.streams);
+                            } else if (data.type === 'permissions_denied') {
+                                clearTimeout(timeout);
+                                window.removeEventListener('message', permissionListener);
+                                reject(new Error('Permissions denied'));
+                            }
+                        } catch (error) {
+                            // Ignore parse errors
+                        }
+                    };
+                    
+                    window.addEventListener('message', permissionListener);
+                });
+            }
+
+            async setupRealMediaTracks() {
+                try {
+                    console.log('🎥 Setting up real media tracks via hybrid bridge');
+                    
+                    // Request permissions and streams from native side
+                    const streams = await this.requestNativePermissions();
+                    
+                    // Replace placeholder tracks with real media tracks
+                    if (streams && streams.length > 0) {
+                        // Clear existing tracks
+                        this.peerConnection.getSenders().forEach(sender => {
+                            if (sender.track) {
+                                this.peerConnection.removeTrack(sender);
+                            }
+                        });
+                        
+                        // Add real media tracks
+                        streams.forEach(stream => {
+                            stream.getTracks().forEach(track => {
+                                this.peerConnection.addTrack(track, stream);
+                                console.log(`📹 Added real ${track.kind} track`);
+                            });
+                        });
+                        
+                        this.postMessageToRN({ type: 'media_ready' });
+                    }
+                } catch (error) {
+                    console.error('Error setting up real media tracks:', error);
+                    this.postMessageToRN({ 
+                        type: 'media_error', 
+                        error: error.message 
+                    });
+                }
+            }
+            
+            async handleRNMessage(data) {
+                console.log('📨 Handling message from React Native:', data);
+                
+                switch (data.type) {
+                    case 'call_state':
+                        this.callState = data.state;
+                        this.isInitiator = data.state.isInitiator;
+                        
+                        // Setup real media tracks when call state is received
+                        await this.setupRealMediaTracks();
+                        
+                        if (this.isInitiator) {
+                            await this.createOffer();
+                        }
+                        break;
+                        
+                    case 'socket_webrtc_offer':
+                        await this.handleOffer(data.data);
+                        break;
+                        
+                    case 'socket_webrtc_answer':
+                        await this.handleAnswer(data.data);
+                        break;
+                        
+                    case 'socket_webrtc_ice_candidate':
+                        await this.handleIceCandidate(data.data);
+                        break;
+
+                    case 'toggle_mute':
+                        this.isMuted = data.muted;
+                        console.log('🔇 Mute toggled:', this.isMuted);
+                        break;
+
+                    case 'toggle_camera':
+                        this.isCameraOff = !data.enabled;
+                        console.log('📹 Camera toggled:', !this.isCameraOff);
+                        break;
+
+                    case 'end_call':
+                        this.endCall();
+                        break;
+                }
+            }
+            
+            async createOffer() {
+                try {
+                    console.log('📤 Creating WebRTC offer');
+                    const offer = await this.peerConnection.createOffer();
+                    await this.peerConnection.setLocalDescription(offer);
+                    
+                    this.postMessageToRN({
+                        type: 'webrtc_offer',
+                        data: offer
+                    });
+                } catch (error) {
+                    console.error('Error creating offer:', error);
+                }
+            }
+            
+            async handleOffer(offer) {
+                try {
+                    console.log('📥 Handling WebRTC offer');
+                    await this.peerConnection.setRemoteDescription(offer);
+                    const answer = await this.peerConnection.createAnswer();
+                    await this.peerConnection.setLocalDescription(answer);
+                    
+                    this.postMessageToRN({
+                        type: 'webrtc_answer',
+                        data: answer
+                    });
+                } catch (error) {
+                    console.error('Error handling offer:', error);
+                }
+            }
+            
+            async handleAnswer(answer) {
+                try {
+                    console.log('✅ Handling WebRTC answer');
+                    await this.peerConnection.setRemoteDescription(answer);
+                } catch (error) {
+                    console.error('Error handling answer:', error);
+                }
+            }
+            
+            async handleIceCandidate(candidate) {
+                try {
+                    await this.peerConnection.addIceCandidate(candidate);
+                    console.log('🧊 Added ICE candidate');
+                } catch (error) {
+                    console.error('Error adding ICE candidate:', error);
+                }
+            }
+            
+            endCall() {
+                console.log('📞 Ending call');
+                this.cleanup();
+                this.postMessageToRN({ type: 'call_ended' });
+            }
+            
+            cleanup() {
+                if (this.peerConnection) {
+                    this.peerConnection.close();
+                }
+            }
+            
+            postMessageToRN(message) {
+                if (window.ReactNativeWebView) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify(message));
+                }
+            }
+        }
+        
+        // Initialize WebRTC signaling when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new WebRTCSignaling();
+        });
+    </script>
+</body>
+</html>
